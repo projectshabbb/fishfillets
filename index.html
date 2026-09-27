@@ -77,6 +77,10 @@
       <input name="password" type="password" placeholder="Password" autocomplete="current-password" required>
       <button type="submit" class="btn-primary" style="width:100%;">Masuk</button>
       <div id="login-error" style="color:var(--danger-ink);font-size:12px;display:none;">Email atau password salah.</div>
+      <div style="text-align:center;">
+        <button type="button" id="btn-forgot" style="background:none;border:none;color:var(--brand);font-size:12px;font-weight:600;">Lupa password?</button>
+      </div>
+      <div id="forgot-status" style="font-size:11px;text-align:center;display:none;"></div>
     </form>
     <div style="font-size:10px;color:var(--sub);text-align:center;margin-top:16px;line-height:1.5;">Belum punya akun? Minta owner mengundang kamu lewat dashboard Supabase.</div>
   </div>
@@ -87,7 +91,7 @@
     <div style="text-align:center;margin-bottom:18px;">
       <img src="assets/logo.png" style="width:64px;height:64px;border-radius:50%;object-fit:cover;margin-bottom:8px;">
       <div style="font-weight:800;font-size:17px;">Buat Password Baru</div>
-      <div style="font-size:11px;color:var(--sub);margin-top:4px;">Ini login pertamamu. Buat password sendiri untuk dipakai login selanjutnya.</div>
+      <div style="font-size:11px;color:var(--sub);margin-top:4px;">Buat password baru untuk akun ini, lalu langsung dipakai untuk login selanjutnya.</div>
     </div>
     <form id="form-setpass" style="display:flex;flex-direction:column;gap:10px;">
       <input name="password" type="password" placeholder="Password baru (min. 6 karakter)" minlength="6" required>
@@ -727,6 +731,32 @@ loginForm.onsubmit = async e=>{
   if(error || !data.user){ err.style.display='block'; return; }
   err.style.display='none';
   await showApp(data.user);
+};
+const btnForgot = document.getElementById('btn-forgot');
+btnForgot.onclick = async ()=>{
+  const email = (loginForm.querySelector('[name="email"]').value || '').trim();
+  const status = document.getElementById('forgot-status');
+  const err = document.getElementById('login-error');
+  err.style.display = 'none';
+  if(!email){
+    status.style.display = 'block';
+    status.style.color = 'var(--danger-ink)';
+    status.textContent = 'Isi email kamu dulu di atas, baru klik "Lupa password?".';
+    return;
+  }
+  btnForgot.disabled = true;
+  btnForgot.textContent = 'Mengirim...';
+  const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
+  btnForgot.disabled = false;
+  btnForgot.textContent = 'Lupa password?';
+  status.style.display = 'block';
+  if(error){
+    status.style.color = 'var(--danger-ink)';
+    status.textContent = 'Gagal mengirim: ' + error.message;
+  } else {
+    status.style.color = 'var(--accent-ink)';
+    status.textContent = 'Link reset password sudah dikirim ke ' + email + '. Cek email (langsung dari Gmail, jangan lewat WhatsApp/Telegram).';
+  }
 };
 const setpassForm = document.getElementById('form-setpass');
 setpassForm.onsubmit = async e=>{
