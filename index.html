@@ -193,7 +193,7 @@ function renderProduk(){
     <div class="card" style="padding:12px;display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
       <div>
         <div style="font-weight:700;font-size:14px;">${esc(p.name)}</div>
-        <div style="font-size:12px;color:var(--sub);">${p.category==='fillet'?'Fillet':'Utuh'} &middot; ${fmtRp(p.price)}/${esc(p.unit||'pcs')}</div>
+        <div style="font-size:12px;color:var(--sub);">${p.category==='fillet'?'Fillet':'Utuh'} &middot; satuan ${esc(p.unit||'pcs')}</div>
       </div>
       <div style="text-align:right;">
         <div style="font-weight:800;">${p.stock}</div>
@@ -212,10 +212,7 @@ function renderProduk(){
         </select>
         <input name="unit" placeholder="Satuan (kg/pack)" value="kg" style="flex:1;">
       </div>
-      <div style="display:flex;gap:8px;">
-        <input name="price" type="number" placeholder="Harga satuan" required style="flex:1;">
-        <input name="stock" type="number" placeholder="Stok awal" value="0" style="flex:1;">
-      </div>
+      <input name="stock" type="number" placeholder="Stok awal" value="0">
       <button type="submit" class="btn-primary">+ Tambah Produk</button>
     </form>
     ${rows}
@@ -225,7 +222,7 @@ function renderProduk(){
 // ---------- KASIR (Transaksi/Nota) ----------
 let kasirCart = [];
 function renderKasir(){
-  const options = state.products.map(p=>`<option value="${p.id}">${esc(p.name)} - ${fmtRp(p.price)}/${esc(p.unit||'pcs')} (stok ${p.stock})</option>`).join('');
+  const options = state.products.map(p=>`<option value="${p.id}">${esc(p.name)} (stok ${p.stock} ${esc(p.unit||'')})</option>`).join('');
   const cartRows = kasirCart.map((it,i)=>`
     <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px;">
       <div>${esc(it.name)}<br><span style="color:var(--sub);font-size:11px;">${it.qty} x ${fmtRp(it.price)}</span></div>
@@ -242,7 +239,10 @@ function renderKasir(){
       <div style="font-size:13px;font-weight:700;margin-bottom:8px;">Tambah item</div>
       <div style="display:flex;flex-direction:column;gap:8px;">
         <select id="cart-product">${options || '<option>Belum ada produk</option>'}</select>
-        <input id="cart-qty" type="number" placeholder="Qty" value="1" min="1">
+        <div style="display:flex;gap:8px;">
+          <input id="cart-qty" type="number" placeholder="Qty" value="1" min="1" style="flex:1;">
+          <input id="cart-price" type="number" placeholder="Harga satuan (Rp)" min="0" style="flex:1;">
+        </div>
         <button id="btn-add-cart" class="btn-secondary">+ Tambah ke keranjang</button>
       </div>
     </div>
@@ -513,8 +513,8 @@ function attachHandlers(){
   if(fp) fp.onsubmit = async e=>{
     e.preventDefault();
     const f = new FormData(fp);
-    const data = { name: f.get('name').trim(), category: f.get('category'), unit: f.get('unit')||'kg', price: Number(f.get('price')), stock: Number(f.get('stock')||0) };
-    if(!data.name || !data.price) return;
+    const data = { name: f.get('name').trim(), category: f.get('category'), unit: f.get('unit')||'kg', price: 0, stock: Number(f.get('stock')||0) };
+    if(!data.name) return;
     await saveProduct(data);
     fp.reset();
   };
@@ -526,9 +526,12 @@ function attachHandlers(){
   if(addCartBtn) addCartBtn.onclick = ()=>{
     const sel = document.getElementById('cart-product');
     const qty = Number(document.getElementById('cart-qty').value || 1);
+    const priceInput = document.getElementById('cart-price');
+    const price = Number(priceInput.value || 0);
     const p = state.products.find(p=>p.id===sel.value);
-    if(!p || qty<=0) return;
-    kasirCart.push({productId:p.id, name:p.name, qty, price:p.price});
+    if(!p || qty<=0){ return; }
+    if(!price || price<=0){ priceInput.focus(); alert('Isi harga satuan dulu.'); return; }
+    kasirCart.push({productId:p.id, name:p.name, qty, price});
     render();
   };
   document.querySelectorAll('[data-rm-cart]').forEach(b=>{
@@ -619,8 +622,8 @@ document.querySelectorAll('.tab-btn[data-tab]').forEach(b=>{
 // (Project Settings > API di dashboard Supabase). Anon key aman untuk
 // dipasang di kode sisi klien selama Row Level Security aktif.
 // ==================================================================
-const SUPABASE_URL = "https://gjevtwsuhpneyqhbbuyl.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_z2sdo9V4EDHQSIs2tAPrkA_ZAp7bB6L";
+const SUPABASE_URL = "https://YOUR-PROJECT-REF.supabase.co";
+const SUPABASE_ANON_KEY = "YOUR-ANON-PUBLIC-KEY";
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ---------- MAPPING JS <-> KOLOM DATABASE ----------
