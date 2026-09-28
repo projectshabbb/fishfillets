@@ -148,7 +148,28 @@ const monthKey = iso => { const d = new Date(iso); return d.getFullYear()+'-'+St
 const monthLabel = key => { const [y,m] = key.split('-').map(Number); return new Date(y,m-1,1).toLocaleDateString('id-ID',{month:'long',year:'numeric'}); };
 const shiftMonth = (key, delta) => { const [y,m] = key.split('-').map(Number); const d = new Date(y, m-1+delta, 1); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); };
 const nowMonth = () => monthKey(new Date().toISOString());
+const pad2 = n => String(n).padStart(2,'0');
+const toDateInput = iso => { const d = new Date(iso); return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); };
+const todayInput = () => toDateInput(new Date().toISOString());
+const dateFromInput = (str, keepIso) => {
+  if(!str) return keepIso || new Date().toISOString();
+  if(keepIso && toDateInput(keepIso)===str) return keepIso;
+  if(str===todayInput()) return new Date().toISOString();
+  const [y,m,d] = str.split('-').map(Number);
+  return new Date(y, m-1, d, 12, 0, 0).toISOString();
+};
 
+function txPayments(txId){ return state.cashflow.filter(c=>c.ref===txId && c.source==='transaction' && c.type==='in').sort((a,b)=>new Date(a.date)-new Date(b.date)); }
+function txStatus(tx){
+  const paid = txPayments(tx.id).reduce((s,c)=>s+c.amount,0);
+  const rest = Math.max(0, tx.total - paid);
+  return { paid, rest, key: rest<=0 ? 'lunas' : (paid>0 ? 'sebagian' : 'belum') };
+}
+const statusPill = key => key==='lunas'
+  ? '<span class="pill" style="background:var(--accent);color:var(--accent-ink);">Lunas</span>'
+  : key==='sebagian'
+  ? '<span class="pill" style="background:rgba(201,150,47,.18);color:var(--brand2);">Sebagian</span>'
+  : '<span class="pill" style="background:var(--danger);color:var(--danger-ink);">Belum bayar</span>';
 let state = { products: [], transactions: [], cashflow: [], opname: [], tab: 'dashboard', ready:false, role:'admin', kasMonth: nowMonth(), riwayatMonth: nowMonth() };
 
 function render(){
@@ -169,6 +190,9 @@ function renderDashboard(){
   const totalIn = state.cashflow.filter(c=>c.type==='in').reduce((s,c)=>s+c.amount,0);
   const totalOut = state.cashflow.filter(c=>c.type==='out').reduce((s,c)=>s+c.amount,0);
   const saldo = totalIn - totalOut;
+  const paidMap = {}; state.cashflow.forEach(c=>{ if(c.source==='transaction' && c.type==='in' && c.ref) paidMap[c.ref]=(paidMap[c.ref]||0)+c.amount; });
+  const openTx = state.transactions.filter(t=>t.total-(paidMap[t.id]||0)>0);
+  const piutang = openTx.reduce((s,t)=>s+t.total-(paidMap[t.id]||0),0);
   const stockRows = state.products.map(p=>`
     <div class="card" style="padding:12px;">
       <div style="font-size:12px;color:var(--sub);margin-bottom:2px;">${esc(p.name)}</div>
@@ -185,6 +209,10 @@ function renderDashboard(){
     <div class="card" style="padding:14px;margin-bottom:16px;background:var(--brand);border:none;">
       <div style="font-size:11px;color:#f0dede;">Saldo</div>
       <div style="font-size:24px;font-weight:800;color:#fff;">${fmtRp(saldo)}</div>
+    </div>
+    <div class="card" style="padding:12px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;">
+      <div><div style="font-size:11px;color:var(--sub);">Piutang belum tertagih</div><div style="font-size:17px;font-weight:800;color:var(--brand2);">${fmtRp(piutang)}</div></div>
+      <div style="font-size:11px;color:var(--sub);text-align:right;">${openTx.length} nota belum lunas</div>
     </div>
     <div style="font-size:13px;font-weight:700;margin-bottom:8px;">Ringkasan stok</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;">${stockRows}</div>
@@ -225,6 +253,7 @@ function renderProduk(){
 
 // ---------- KASIR (Transaksi/Nota) ----------
 let kasirCart = [];
+let kasirPaidTouched = false;
 function renderKasir(){
   const options = state.products.map(p=>`<option value="${p.id}">${esc(p.name)} (stok ${p.stock} ${esc(p.unit||'')})</option>`).join('');
   const cartRows = kasirCart.map((it,i)=>`
@@ -267,6 +296,12 @@ function renderKasir(){
       <div style="font-size:13px;font-weight:700;margin-top:4px;">Data pembeli</div>
       <input name="buyerName" placeholder="Nama pembeli" required>
       <input name="buyerPhone" placeholder="Nomor HP pembeli" required>
+      <div style="font-size:11px;color:var(--sub);margin-top:2px;">Tanggal nota &amp; pembayaran (ubah jika nota dibuat untuk tanggal pengiriman)</div>
+      <input name="date" type="date" value="${todayInput()}" required>
+      <div style="font-size:13px;font-weight:700;margin-top:4px;">Pembayaran</div>
+      <input id="input-paid" name="paid" type="number" min="0" placeholder="Dibayar sekarang (Rp)" value="${subtotal}">
+      <div id="kasir-rest" style="font-size:12px;font-weight:600;"></div>
+      <div style="font-size:11px;color:var(--sub);">Isi sebagian jika pembeli mencicil, sisanya tercatat sebagai tagihan. Metode pembayaran:</div>
       <select name="payment">
         <option value="cash">Cash</option>
         <option value="transfer">Transfer</option>
@@ -363,17 +398,19 @@ function renderRiwayat(){
     ...state.cashflow.filter(c=>c.source!=='transaction').map(c=>({...c, kind:'cash'}))
   ].filter(it=>monthKey(it.date)===state.riwayatMonth).sort((a,b)=> new Date(b.date) - new Date(a.date));
   const omzet = state.transactions.filter(t=>monthKey(t.date)===state.riwayatMonth).reduce((s,t)=>s+t.total,0);
+  const sisaBulan = state.transactions.filter(t=>monthKey(t.date)===state.riwayatMonth).reduce((s,t)=>s+txStatus(t).rest,0);
   const jumlahTransaksi = state.transactions.filter(t=>monthKey(t.date)===state.riwayatMonth).length;
   const rows = items.map(it=>{
     if(it.kind==='sale'){
+      const st = txStatus(it);
       return `<div class="card" style="padding:12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;" data-nota="${it.id}">
         <div>
           <div style="font-weight:700;font-size:14px;">${esc(it.buyerName)}</div>
-          <div style="font-size:11px;color:var(--sub);">${fmtDate(it.date)} &middot; <span class="pill" style="background:var(--accent);color:var(--accent-ink);">${it.payment==='cash'?'Cash':'Transfer'}</span></div>
+          <div style="font-size:11px;color:var(--sub);">${fmtDate(it.date)} &middot; ${statusPill(st.key)}</div>
         </div>
         <div style="text-align:right;">
-          <div style="font-weight:800;color:var(--accent-ink);">+${fmtRp(it.total)}</div>
-          <div style="font-size:11px;color:var(--brand);">Lihat nota &rsaquo;</div>
+          <div style="font-weight:800;">${fmtRp(it.total)}</div>
+          ${st.rest>0 ? `<div style="font-size:11px;color:var(--brand2);font-weight:600;">Sisa ${fmtRp(st.rest)}</div>` : `<div style="font-size:11px;color:var(--brand);">Lihat nota &rsaquo;</div>`}
         </div>
       </div>`;
     }
@@ -394,9 +431,10 @@ function renderRiwayat(){
       <div style="flex:1;text-align:center;font-weight:700;font-size:14px;">${monthLabel(state.riwayatMonth)}</div>
       <button id="riwayat-next" class="btn-secondary" style="padding:6px 12px;">&rsaquo;</button>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;">
-      <div class="card" style="padding:10px;"><div style="font-size:10px;color:var(--sub);">Omzet penjualan</div><div style="font-weight:800;font-size:14px;color:var(--accent-ink);">${fmtRp(omzet)}</div></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px;">
+      <div class="card" style="padding:10px;"><div style="font-size:10px;color:var(--sub);">Omzet nota</div><div style="font-weight:800;font-size:14px;color:var(--accent-ink);">${fmtRp(omzet)}</div></div>
       <div class="card" style="padding:10px;"><div style="font-size:10px;color:var(--sub);">Jumlah transaksi</div><div style="font-weight:800;font-size:14px;">${jumlahTransaksi}</div></div>
+      <div class="card" style="padding:10px;"><div style="font-size:10px;color:var(--sub);">Sisa tagihan</div><div style="font-weight:800;font-size:14px;color:var(--brand2);">${fmtRp(sisaBulan)}</div></div>
     </div>
     ${rows}
   `;
@@ -414,6 +452,11 @@ function openNota(tx){
   const subtotal = tx.subtotal != null ? tx.subtotal : tx.items.reduce((s,it)=>s+it.qty*it.price,0);
   const discount = tx.discount || 0;
   const shipping = tx.shipping || 0;
+  const st = txStatus(tx);
+  const pays = txPayments(tx.id);
+  const shortDate = iso => new Date(iso).toLocaleDateString('id-ID',{day:'numeric',month:'short',year:'numeric'});
+  const payHtml = pays.length ? `<div style="margin-top:8px;font-size:12px;">${pays.map(p=>`<div style="display:flex;justify-content:space-between;padding:2px 0;color:#444;"><span>Dibayar ${shortDate(p.date)} (${p.payment==='cash'?'Cash':'Transfer'})</span><span>${fmtRp(p.amount)}</span></div>`).join('')}</div>` : '';
+  const restHtml = st.rest>0 ? `<div style="display:flex;justify-content:space-between;padding-top:6px;margin-top:4px;border-top:1px dashed #ddd;font-weight:800;font-size:14px;color:#a3282c;"><span>SISA TAGIHAN</span><span>${fmtRp(st.rest)}</span></div>` : '';
   const html = `
   <div id="modal-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:flex-end;justify-content:center;">
     <div style="background:var(--bg);width:100%;max-width:520px;max-height:92vh;overflow-y:auto;border-radius:16px 16px 0 0;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
@@ -439,7 +482,7 @@ function openNota(tx){
           </div>
           <div style="text-align:right;">
             <div>${fmtDate(tx.date)}</div>
-            <div style="color:${tx.payment==='cash'?'#1f7a3f':'#a3282c'};font-weight:700;">${tx.payment==='cash'?'CASH':'TRANSFER'}</div>
+            <div style="color:${st.key==='lunas'?'#1f7a3f':'#a3282c'};font-weight:700;">${st.key==='lunas'?'LUNAS':'BELUM LUNAS'}</div>
           </div>
         </div>
         <table style="width:100%;border-collapse:collapse;font-size:12px;">
@@ -459,6 +502,7 @@ function openNota(tx){
         <div style="display:flex;justify-content:space-between;padding-top:12px;margin-top:6px;border-top:2px solid #7a1518;font-weight:800;font-size:15px;">
           <span>TOTAL</span><span>${fmtRp(tx.total)}</span>
         </div>
+        ${payHtml}${restHtml}
         <div style="text-align:center;font-size:10.5px;color:#555;margin-top:14px;border-top:1px dashed #ddd;padding-top:10px;">
           Pembayaran transfer ke <b>BCA 0482147630 a.n. Salwa Shabrina</b>
         </div>
@@ -485,16 +529,16 @@ function closeNota(){ document.getElementById('modal-root').innerHTML = ''; }
 // ---------- EDIT NOTA ----------
 let editDraft = null;
 function openEditNota(tx){
-  editDraft = { id: tx.id, buyerName: tx.buyerName, buyerPhone: tx.buyerPhone, payment: tx.payment,
+  editDraft = { id: tx.id, date: toDateInput(tx.date), buyerName: tx.buyerName, buyerPhone: tx.buyerPhone, payments: txPayments(tx.id).map(c=>({ id:c.id, date:toDateInput(c.date), origDate:c.date, amount:c.amount, method:c.payment, prefix:(c.desc||'').startsWith('Cicilan')?'Cicilan':'Penjualan', del:false })),
     discount: tx.discount||0, shipping: tx.shipping||0, items: tx.items.map(it=>({...it})), original: tx };
   renderEditNota();
 }
 function syncEditDraft(){
   const g = id => document.getElementById(id);
   if(!g('edit-buyer-name')) return;
+  editDraft.date = g('edit-date').value;
   editDraft.buyerName = g('edit-buyer-name').value;
   editDraft.buyerPhone = g('edit-buyer-phone').value;
-  editDraft.payment = g('edit-payment').value;
   editDraft.discount = Number(g('edit-discount').value||0);
   editDraft.shipping = Number(g('edit-shipping').value||0);
 }
@@ -506,6 +550,13 @@ function refreshEditTotals(){
   const t = editTotals();
   document.getElementById('edit-subtotal').textContent = fmtRp(t.subtotal);
   document.getElementById('edit-total').textContent = fmtRp(t.total);
+  const paid = editDraft.payments.filter(p=>!p.del).reduce((s,p)=>s+(p.amount||0),0);
+  const rest = t.total - paid;
+  const el = document.getElementById('edit-pay-summary');
+  if(el){
+    el.textContent = 'Dibayar '+fmtRp(paid)+' · ' + (rest>0 ? 'Sisa '+fmtRp(rest) : rest<0 ? 'Lebih bayar '+fmtRp(-rest) : 'Lunas');
+    el.style.color = rest>0 ? 'var(--brand2)' : rest<0 ? 'var(--danger-ink)' : 'var(--accent-ink)';
+  }
 }
 function renderEditNota(){
   const d = editDraft;
@@ -526,14 +577,12 @@ function renderEditNota(){
   <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:flex-end;justify-content:center;">
     <div style="background:var(--bg);width:100%;max-width:520px;max-height:92vh;overflow-y:auto;border-radius:16px 16px 0 0;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
       <div style="font-weight:800;margin-bottom:2px;">Edit Nota</div>
-      <div style="font-size:11px;color:var(--sub);margin-bottom:12px;">${fmtDate(d.original.date)} &middot; tanggal nota tidak berubah</div>
+      <div style="font-size:11px;color:var(--sub);margin-bottom:12px;">Nota tanggal ${fmtDate(d.original.date)}</div>
       <div class="card" style="padding:12px;margin-bottom:10px;display:flex;flex-direction:column;gap:8px;">
         <input id="edit-buyer-name" value="${esc(d.buyerName)}" placeholder="Nama pembeli">
         <input id="edit-buyer-phone" value="${esc(d.buyerPhone)}" placeholder="Nomor HP pembeli">
-        <select id="edit-payment">
-          <option value="cash" ${d.payment==='cash'?'selected':''}>Cash</option>
-          <option value="transfer" ${d.payment==='transfer'?'selected':''}>Transfer</option>
-        </select>
+        <div style="font-size:11px;color:var(--sub);">Tanggal nota &amp; pembayaran</div>
+        <input id="edit-date" type="date" value="${d.date}">
       </div>
       <div class="card" style="padding:12px;margin-bottom:10px;">
         <div style="font-size:13px;font-weight:700;">Item pesanan</div>
@@ -556,6 +605,27 @@ function renderEditNota(){
         <div style="display:flex;justify-content:space-between;font-size:13px;padding-top:10px;"><span>Subtotal</span><span id="edit-subtotal">${fmtRp(t.subtotal)}</span></div>
         <div style="display:flex;justify-content:space-between;font-weight:800;font-size:15px;padding-top:4px;"><span>Total</span><span id="edit-total">${fmtRp(t.total)}</span></div>
       </div>
+      <div class="card" style="padding:12px;margin-bottom:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+          <div style="font-size:13px;font-weight:700;">Pembayaran</div>
+          <div id="edit-pay-summary" style="font-size:12px;font-weight:600;"></div>
+        </div>
+        ${d.payments.map((p,i)=> p.del ? '' : `
+        <div style="padding:8px 0;border-bottom:1px solid var(--line);">
+          <div style="display:flex;gap:8px;">
+            <input type="date" data-pay-date="${i}" value="${p.date}" style="flex:1;">
+            <select data-pay-method="${i}" style="flex:1;">
+              <option value="cash" ${p.method==='cash'?'selected':''}>Cash</option>
+              <option value="transfer" ${p.method==='transfer'?'selected':''}>Transfer</option>
+            </select>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:6px;align-items:center;">
+            <input type="number" min="0" data-pay-amount="${i}" value="${p.amount}" placeholder="Jumlah dibayar (Rp)" style="flex:1;">
+            ${(state.role==='owner' || !p.id) ? `<button data-pay-rm="${i}" style="color:var(--danger-ink);background:none;border:none;font-size:18px;">&times;</button>` : ''}
+          </div>
+        </div>`).join('') || '<div style="color:var(--sub);font-size:12px;padding:8px 0;">Belum ada pembayaran tercatat.</div>'}
+        <button id="edit-add-pay" class="btn-secondary" style="width:100%;margin-top:8px;">+ Tambah pembayaran (cicilan)</button>
+      </div>
       <div style="display:flex;gap:8px;">
         <button id="edit-save" class="btn-primary" style="flex:1;">Simpan Perubahan</button>
         <button id="edit-cancel" class="btn-secondary" style="flex:1;">Batal</button>
@@ -574,6 +644,22 @@ function renderEditNota(){
   });
   $('#edit-discount').oninput = ()=>{ syncEditDraft(); refreshEditTotals(); };
   $('#edit-shipping').oninput = ()=>{ syncEditDraft(); refreshEditTotals(); };
+  $('#edit-date').oninput = ()=>{
+    const prev = d.date, nv = $('#edit-date').value;
+    if(!nv) return;
+    d.payments.forEach((p,i)=>{ if(p.date===prev){ p.date = nv; const el = document.querySelector(`[data-pay-date="${i}"]`); if(el) el.value = nv; } });
+    d.date = nv;
+  };
+  document.querySelectorAll('[data-pay-date]').forEach(inp=>{ inp.oninput = ()=>{ d.payments[Number(inp.dataset.payDate)].date = inp.value; }; });
+  document.querySelectorAll('[data-pay-method]').forEach(sel=>{ sel.onchange = ()=>{ d.payments[Number(sel.dataset.payMethod)].method = sel.value; }; });
+  document.querySelectorAll('[data-pay-amount]').forEach(inp=>{ inp.oninput = ()=>{ d.payments[Number(inp.dataset.payAmount)].amount = Number(inp.value||0); refreshEditTotals(); }; });
+  document.querySelectorAll('[data-pay-rm]').forEach(b=>{ b.onclick = ()=>{ syncEditDraft(); d.payments[Number(b.dataset.payRm)].del = true; renderEditNota(); }; });
+  $('#edit-add-pay').onclick = ()=>{
+    syncEditDraft();
+    const paid = d.payments.filter(p=>!p.del).reduce((s,p)=>s+(p.amount||0),0);
+    d.payments.push({ id:null, date:todayInput(), origDate:null, amount:Math.max(0, editTotals().total - paid), method:'cash', prefix:'Cicilan', del:false });
+    renderEditNota();
+  };
   $('#edit-add-item').onclick = ()=>{
     syncEditDraft();
     const p = state.products.find(p=>p.id===$('#edit-new-product').value);
@@ -585,10 +671,16 @@ function renderEditNota(){
     if(existing) existing.qty += qty; else d.items.push({ productId:p.id, name:p.name, qty, price });
     renderEditNota();
   };
+  refreshEditTotals();
   $('#edit-cancel').onclick = ()=> openNota(d.original);
   $('#edit-save').onclick = async ()=>{
     syncEditDraft();
     if(!d.buyerName.trim() || !d.buyerPhone.trim()){ alert('Nama dan nomor HP pembeli harus diisi.'); return; }
+    if(!d.date){ alert('Tanggal nota harus diisi.'); return; }
+    const livePay = d.payments.filter(p=>!p.del);
+    if(livePay.some(p=>!(p.amount>0))){ alert('Jumlah pembayaran harus lebih dari 0. Hapus baris yang tidak dipakai.'); return; }
+    if(livePay.some(p=>!p.date)){ alert('Tanggal pembayaran harus diisi.'); return; }
+    if(livePay.reduce((s,p)=>s+p.amount,0) > editTotals().total){ alert('Total pembayaran melebihi total nota.'); return; }
     if(d.items.length===0){ alert('Nota harus punya minimal 1 item.'); return; }
     if(d.items.some(it=>!(it.qty>0) || !(it.price>0))){ alert('Semua item harus punya qty dan harga lebih dari 0.'); return; }
     const btn = $('#edit-save'); btn.disabled = true; btn.textContent = 'Menyimpan...';
@@ -669,23 +761,32 @@ function attachHandlers(){
     const discount = Number(f.get('discount')||0);
     const shipping = Number(f.get('shipping')||0);
     const total = Math.max(0, subtotal - discount + shipping);
-    const tx = { id: uid(), date: new Date().toISOString(), buyerName: f.get('buyerName').trim(), buyerPhone: f.get('buyerPhone').trim(), payment: f.get('payment'), items: kasirCart.map(it=>({...it})), subtotal, discount, shipping, total };
-    await saveTransaction(tx);
+    const paid = Math.min(total, Math.max(0, Number(f.get('paid')||0)));
+    const tx = { id: uid(), date: dateFromInput(f.get('date')), buyerName: f.get('buyerName').trim(), buyerPhone: f.get('buyerPhone').trim(), payment: f.get('payment'), items: kasirCart.map(it=>({...it})), subtotal, discount, shipping, total, paid };
+    const saved = await saveTransaction(tx);
     kasirCart = [];
     fk.reset();
-    openNota(tx);
+    if(saved) openNota(saved);
   };
   const inputDiskon = document.getElementById('input-diskon');
   const inputOngkir = document.getElementById('input-ongkir');
   const totalPreview = document.getElementById('kasir-total-preview');
   if(inputDiskon && inputOngkir && totalPreview){
-    const updatePreview = ()=>{
-      const subtotal = kasirCart.reduce((s,it)=>s+it.qty*it.price,0);
-      const d = Number(inputDiskon.value||0), o = Number(inputOngkir.value||0);
-      totalPreview.textContent = fmtRp(Math.max(0, subtotal - d + o));
+    kasirPaidTouched = false;
+    const paidEl = document.getElementById('input-paid');
+    const restEl = document.getElementById('kasir-rest');
+    const calcTotal = ()=> Math.max(0, kasirCart.reduce((s,it)=>s+it.qty*it.price,0) - Number(inputDiskon.value||0) + Number(inputOngkir.value||0));
+    const refresh = ()=>{
+      const tot = calcTotal();
+      totalPreview.textContent = fmtRp(tot);
+      if(!kasirPaidTouched) paidEl.value = tot;
+      const rest = tot - Math.min(tot, Number(paidEl.value||0));
+      restEl.textContent = rest>0 ? 'Sisa tagihan: '+fmtRp(rest) : 'Lunas';
+      restEl.style.color = rest>0 ? 'var(--brand2)' : 'var(--accent-ink)';
     };
-    inputDiskon.oninput = updatePreview;
-    inputOngkir.oninput = updatePreview;
+    inputDiskon.oninput = refresh; inputOngkir.oninput = refresh;
+    paidEl.oninput = ()=>{ kasirPaidTouched = true; refresh(); };
+    refresh();
   }
 
   const fkas = document.getElementById('form-kas');
@@ -789,15 +890,17 @@ async function saveTransaction(tx){
     const p = state.products.find(p=>p.id===it.productId);
     if(p) await sb.from('products').update({ stock: Math.max(0, p.stock - it.qty) }).eq('id', p.id);
   }
-  await sb.from('cashflow').insert({ date: tx.date, type:'in', description:`Penjualan - ${tx.buyerName}`, amount: tx.total, payment: tx.payment, source:'transaction', ref: inserted.id });
+  if(tx.paid>0) await sb.from('cashflow').insert({ date: tx.date, type:'in', description:`Penjualan - ${tx.buyerName}`, amount: tx.paid, payment: tx.payment, source:'transaction', ref: inserted.id });
   await fetchAll();
   return rowToTransaction(inserted);
 }
 async function updateTransaction(oldTx, d){
   const subtotal = d.items.reduce((s,it)=>s+it.qty*it.price,0);
   const total = Math.max(0, subtotal - d.discount + d.shipping);
+  const newDate = dateFromInput(d.date, oldTx.date);
+  const firstMethod = (d.payments.find(p=>!p.del) || {}).method || oldTx.payment;
   const { data: upd, error } = await sb.from('transactions').update({
-    buyer_name: d.buyerName.trim(), buyer_phone: d.buyerPhone.trim(), payment: d.payment,
+    date: newDate, buyer_name: d.buyerName.trim(), buyer_phone: d.buyerPhone.trim(), payment: firstMethod,
     items: d.items, subtotal, discount: d.discount, shipping: d.shipping, total
   }).eq('id', oldTx.id).select();
   if(error){ alert('Gagal menyimpan perubahan: '+error.message); return null; }
@@ -814,11 +917,22 @@ async function updateTransaction(oldTx, d){
     const p = state.products.find(p=>p.id===pid);
     if(p) await sb.from('products').update({ stock: Math.max(0, p.stock + diff) }).eq('id', pid);
   }
-  // sesuaikan catatan kas dari nota ini
-  const { data: cf } = await sb.from('cashflow')
-    .update({ description:`Penjualan - ${d.buyerName.trim()}`, amount: total, payment: d.payment })
-    .eq('ref', oldTx.id).eq('source','transaction').select();
-  if(!cf || cf.length===0) alert('Nota tersimpan, tapi catatan kas belum ikut berubah. Pastikan SQL migration edit nota sudah dijalankan.');
+  // pembayaran = baris kas yang terhubung ke nota ini
+  let payFail = false;
+  for(const p of d.payments){
+    const desc = `${p.prefix} - ${d.buyerName.trim()}`;
+    if(p.id && p.del){
+      const { data: r } = await sb.from('cashflow').delete().eq('id', p.id).select();
+      if(!r || r.length===0) payFail = true;
+    } else if(p.id){
+      const { data: r } = await sb.from('cashflow').update({ date: dateFromInput(p.date, p.origDate), description: desc, amount: p.amount, payment: p.method }).eq('id', p.id).select();
+      if(!r || r.length===0) payFail = true;
+    } else if(!p.del){
+      const { error: e2 } = await sb.from('cashflow').insert({ date: dateFromInput(p.date), type:'in', description: desc, amount: p.amount, payment: p.method, source:'transaction', ref: oldTx.id });
+      if(e2) payFail = true;
+    }
+  }
+  if(payFail) alert('Sebagian perubahan pembayaran ditolak database. Pastikan SQL migration pembayaran (migration_pembayaran.sql) sudah dijalankan.');
   await fetchAll();
   return state.transactions.find(t=>t.id===oldTx.id) || null;
 }
