@@ -295,10 +295,14 @@ function renderKasir(){
       </div>
       <div style="font-size:13px;font-weight:700;margin-top:4px;">Data pembeli</div>
       <input name="buyerName" placeholder="Nama pembeli" required>
-      <input name="buyerPhone" placeholder="Nomor HP pembeli" required>
+      <input name="buyerPhone" placeholder="Nomor HP pembeli (opsional)">
       <div style="font-size:11px;color:var(--sub);margin-top:2px;">Tanggal nota &amp; pembayaran (ubah jika nota dibuat untuk tanggal pengiriman)</div>
       <input name="date" type="date" value="${todayInput()}" required>
       <div style="font-size:13px;font-weight:700;margin-top:4px;">Pembayaran</div>
+      <select id="input-status" name="status">
+        <option value="lunas">Lunas (dibayar penuh)</option>
+        <option value="belum">Belum lunas (bayar sebagian / nanti)</option>
+      </select>
       <input id="input-paid" name="paid" type="number" min="0" placeholder="Dibayar sekarang (Rp)" value="${subtotal}">
       <div id="kasir-rest" style="font-size:12px;font-weight:600;"></div>
       <div style="font-size:11px;color:var(--sub);">Isi sebagian jika pembeli mencicil, sisanya tercatat sebagai tagihan. Metode pembayaran:</div>
@@ -478,7 +482,7 @@ function openNota(tx){
         <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:10px;">
           <div>
             <div><b>Pembeli:</b> ${esc(tx.buyerName)}</div>
-            <div><b>No. HP:</b> ${esc(tx.buyerPhone)}</div>
+            ${tx.buyerPhone ? `<div><b>No. HP:</b> ${esc(tx.buyerPhone)}</div>` : ''}
           </div>
           <div style="text-align:right;">
             <div>${fmtDate(tx.date)}</div>
@@ -580,7 +584,7 @@ function renderEditNota(){
       <div style="font-size:11px;color:var(--sub);margin-bottom:12px;">Nota tanggal ${fmtDate(d.original.date)}</div>
       <div class="card" style="padding:12px;margin-bottom:10px;display:flex;flex-direction:column;gap:8px;">
         <input id="edit-buyer-name" value="${esc(d.buyerName)}" placeholder="Nama pembeli">
-        <input id="edit-buyer-phone" value="${esc(d.buyerPhone)}" placeholder="Nomor HP pembeli">
+        <input id="edit-buyer-phone" value="${esc(d.buyerPhone)}" placeholder="Nomor HP pembeli (opsional)">
         <div style="font-size:11px;color:var(--sub);">Tanggal nota &amp; pembayaran</div>
         <input id="edit-date" type="date" value="${d.date}">
       </div>
@@ -624,7 +628,10 @@ function renderEditNota(){
             ${(state.role==='owner' || !p.id) ? `<button data-pay-rm="${i}" style="color:var(--danger-ink);background:none;border:none;font-size:18px;">&times;</button>` : ''}
           </div>
         </div>`).join('') || '<div style="color:var(--sub);font-size:12px;padding:8px 0;">Belum ada pembayaran tercatat.</div>'}
-        <button id="edit-add-pay" class="btn-secondary" style="width:100%;margin-top:8px;">+ Tambah pembayaran (cicilan)</button>
+        <div style="display:flex;gap:8px;margin-top:8px;">
+          <button id="edit-add-pay" class="btn-secondary" style="flex:1;">+ Tambah pembayaran</button>
+          <button id="edit-mark-lunas" class="btn-primary" style="flex:1;">✓ Tandai lunas</button>
+        </div>
       </div>
       <div style="display:flex;gap:8px;">
         <button id="edit-save" class="btn-primary" style="flex:1;">Simpan Perubahan</button>
@@ -654,6 +661,14 @@ function renderEditNota(){
   document.querySelectorAll('[data-pay-method]').forEach(sel=>{ sel.onchange = ()=>{ d.payments[Number(sel.dataset.payMethod)].method = sel.value; }; });
   document.querySelectorAll('[data-pay-amount]').forEach(inp=>{ inp.oninput = ()=>{ d.payments[Number(inp.dataset.payAmount)].amount = Number(inp.value||0); refreshEditTotals(); }; });
   document.querySelectorAll('[data-pay-rm]').forEach(b=>{ b.onclick = ()=>{ syncEditDraft(); d.payments[Number(b.dataset.payRm)].del = true; renderEditNota(); }; });
+  $('#edit-mark-lunas').onclick = ()=>{
+    syncEditDraft();
+    const paid = d.payments.filter(p=>!p.del).reduce((s,p)=>s+(p.amount||0),0);
+    const rest = editTotals().total - paid;
+    if(rest<=0){ alert('Nota ini sudah lunas.'); return; }
+    d.payments.push({ id:null, date:todayInput(), origDate:null, amount:rest, method:'cash', prefix:'Cicilan', del:false });
+    renderEditNota();
+  };
   $('#edit-add-pay').onclick = ()=>{
     syncEditDraft();
     const paid = d.payments.filter(p=>!p.del).reduce((s,p)=>s+(p.amount||0),0);
@@ -675,7 +690,7 @@ function renderEditNota(){
   $('#edit-cancel').onclick = ()=> openNota(d.original);
   $('#edit-save').onclick = async ()=>{
     syncEditDraft();
-    if(!d.buyerName.trim() || !d.buyerPhone.trim()){ alert('Nama dan nomor HP pembeli harus diisi.'); return; }
+    if(!d.buyerName.trim()){ alert('Nama pembeli harus diisi.'); return; }
     if(!d.date){ alert('Tanggal nota harus diisi.'); return; }
     const livePay = d.payments.filter(p=>!p.del);
     if(livePay.some(p=>!(p.amount>0))){ alert('Jumlah pembayaran harus lebih dari 0. Hapus baris yang tidak dipakai.'); return; }
@@ -775,17 +790,20 @@ function attachHandlers(){
     kasirPaidTouched = false;
     const paidEl = document.getElementById('input-paid');
     const restEl = document.getElementById('kasir-rest');
+    const statusEl = document.getElementById('input-status');
     const calcTotal = ()=> Math.max(0, kasirCart.reduce((s,it)=>s+it.qty*it.price,0) - Number(inputDiskon.value||0) + Number(inputOngkir.value||0));
     const refresh = ()=>{
       const tot = calcTotal();
       totalPreview.textContent = fmtRp(tot);
-      if(!kasirPaidTouched) paidEl.value = tot;
+      if(statusEl.value==='lunas'){ paidEl.value = tot; paidEl.readOnly = true; }
+      else { paidEl.readOnly = false; if(!kasirPaidTouched) paidEl.value = 0; }
       const rest = tot - Math.min(tot, Number(paidEl.value||0));
       restEl.textContent = rest>0 ? 'Sisa tagihan: '+fmtRp(rest) : 'Lunas';
       restEl.style.color = rest>0 ? 'var(--brand2)' : 'var(--accent-ink)';
     };
     inputDiskon.oninput = refresh; inputOngkir.oninput = refresh;
     paidEl.oninput = ()=>{ kasirPaidTouched = true; refresh(); };
+    statusEl.onchange = ()=>{ kasirPaidTouched = false; refresh(); };
     refresh();
   }
 
