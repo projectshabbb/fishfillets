@@ -534,6 +534,7 @@ function openNota(tx){
         <button id="btn-export-png" class="btn-secondary" style="flex:1;">⬇ PNG</button>
       </div>
       <button id="btn-edit-nota" class="btn-secondary" style="width:100%;margin-top:8px;">✏️ Edit Nota</button>
+      ${(state.role==='owner' && st.rest>0) ? `<button id="btn-cancel-tx" style="width:100%;margin-top:8px;background:none;border:none;color:var(--danger-ink);font-size:13px;font-weight:600;padding:6px;">🗑️ Batalkan Transaksi</button>` : ''}
       <button id="close-nota-2" class="btn-secondary" style="width:100%;margin-top:8px;">Tutup</button>
     </div>
   </div>`;
@@ -543,6 +544,8 @@ function openNota(tx){
   document.getElementById('btn-export-pdf').onclick = () => exportNotaPdf(tx);
   document.getElementById('btn-export-png').onclick = () => exportNotaPng(tx);
   document.getElementById('btn-edit-nota').onclick = () => openEditNota(tx);
+  const btnCancelTx = document.getElementById('btn-cancel-tx');
+  if(btnCancelTx) btnCancelTx.onclick = () => cancelTransaction(tx);
 }
 function closeNota(){ document.getElementById('modal-root').innerHTML = ''; }
 
@@ -931,10 +934,14 @@ async function saveTransaction(tx){
     items: tx.items, subtotal: tx.subtotal, discount: tx.discount, shipping: tx.shipping, total: tx.total
   }).select().single();
   if(error){ alert('Gagal menyimpan transaksi: '+error.message); return null; }
+  let stockFail = false;
   for(const it of tx.items){
     const p = state.products.find(p=>p.id===it.productId);
-    if(p) await sb.from('products').update({ stock: Math.max(0, p.stock - it.qty) }).eq('id', p.id);
+    if(!p) continue;
+    const { data: r } = await sb.from('products').update({ stock: Math.max(0, p.stock - it.qty) }).eq('id', p.id).select();
+    if(!r || r.length===0) stockFail = true;
   }
+  if(stockFail) alert('Nota tersimpan, tapi stok sebagian produk gagal dikurangi (kemungkinan izin database). Cek stok manual lewat Stock Opname.');
   if(tx.paid>0) await sb.from('cashflow').insert({ date: tx.date, type:'in', description:`Penjualan - ${tx.buyerName}`, amount: tx.paid, payment: tx.payment, source:'transaction', ref: inserted.id });
   await fetchAll();
   return rowToTransaction(inserted);
@@ -980,6 +987,22 @@ async function updateTransaction(oldTx, d){
   if(payFail) alert('Sebagian perubahan pembayaran ditolak database. Pastikan SQL migration pembayaran (migration_pembayaran.sql) sudah dijalankan.');
   await fetchAll();
   return state.transactions.find(t=>t.id===oldTx.id) || null;
+}
+async function cancelTransaction(tx){
+  if(!confirm(`Batalkan nota ${tx.buyerName} senilai ${fmtRp(tx.total)}? Stok akan dikembalikan dan nota ini dihapus permanen.`)) return;
+  const { data: cf } = await sb.from('cashflow').delete().eq('ref', tx.id).eq('source','transaction').select();
+  for(const it of tx.items){
+    const p = state.products.find(p=>p.id===it.productId);
+    if(p) await sb.from('products').update({ stock: p.stock + it.qty }).eq('id', p.id);
+  }
+  const { data: delTx, error } = await sb.from('transactions').delete().eq('id', tx.id).select();
+  if(error || !delTx || delTx.length===0){
+    alert('Gagal membatalkan transaksi. Pastikan SQL migration_batalkan.sql sudah dijalankan di Supabase.');
+    return;
+  }
+  await fetchAll();
+  closeNota();
+  alert('Transaksi dibatalkan dan stok sudah dikembalikan.');
 }
 async function saveCashflow(entry){
   const { error } = await sb.from('cashflow').insert({ date: entry.date, type: entry.type, description: entry.desc, amount: entry.amount, payment: entry.payment, source:'manual' });
