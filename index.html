@@ -254,6 +254,22 @@ function renderProduk(){
 // ---------- KASIR (Transaksi/Nota) ----------
 let kasirCart = [];
 let kasirPaidTouched = false;
+let kasirDraft = { buyerName:'', buyerPhone:'', discount:'0', shipping:'0', paid:'', status:'lunas', date:'' };
+function loadKasirDraft(){
+  try{
+    const raw = localStorage.getItem('ff_kasir_draft');
+    if(raw){ const d = JSON.parse(raw); kasirCart = d.cart || []; kasirDraft = Object.assign(kasirDraft, d.fields||{}); }
+  }catch(e){}
+}
+function saveKasirDraft(){
+  try{ localStorage.setItem('ff_kasir_draft', JSON.stringify({ cart: kasirCart, fields: kasirDraft })); }catch(e){}
+}
+function clearKasirDraft(){
+  try{ localStorage.removeItem('ff_kasir_draft'); }catch(e){}
+  kasirCart = [];
+  kasirDraft = { buyerName:'', buyerPhone:'', discount:'0', shipping:'0', paid:'', status:'lunas', date:'' };
+}
+loadKasirDraft();
 function renderKasir(){
   const options = state.products.map(p=>`<option value="${p.id}">${esc(p.name)} (stok ${p.stock} ${esc(p.unit||'')})</option>`).join('');
   const cartRows = kasirCart.map((it,i)=>`
@@ -287,23 +303,23 @@ function renderKasir(){
     <form id="form-kasir" class="card" style="padding:14px;display:flex;flex-direction:column;gap:8px;">
       <div style="font-size:13px;font-weight:700;">Diskon &amp; ongkos kirim (opsional)</div>
       <div style="display:flex;gap:8px;">
-        <input id="input-diskon" name="discount" type="number" placeholder="Diskon (Rp)" value="0" style="flex:1;">
-        <input id="input-ongkir" name="shipping" type="number" placeholder="Ongkir (Rp)" value="0" style="flex:1;">
+        <input id="input-diskon" name="discount" type="number" placeholder="Diskon (Rp)" value="${kasirDraft.discount}" style="flex:1;">
+        <input id="input-ongkir" name="shipping" type="number" placeholder="Ongkir (Rp)" value="${kasirDraft.shipping}" style="flex:1;">
       </div>
       <div style="display:flex;justify-content:space-between;font-weight:800;font-size:15px;padding:6px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);">
         <span>Total</span><span id="kasir-total-preview">${fmtRp(subtotal)}</span>
       </div>
       <div style="font-size:13px;font-weight:700;margin-top:4px;">Data pembeli</div>
-      <input name="buyerName" placeholder="Nama pembeli" required>
-      <input name="buyerPhone" placeholder="Nomor HP pembeli (opsional)">
+      <input name="buyerName" placeholder="Nama pembeli" value="${esc(kasirDraft.buyerName)}" required>
+      <input name="buyerPhone" placeholder="Nomor HP pembeli (opsional)" value="${esc(kasirDraft.buyerPhone)}">
       <div style="font-size:11px;color:var(--sub);margin-top:2px;">Tanggal nota &amp; pembayaran (ubah jika nota dibuat untuk tanggal pengiriman)</div>
-      <input name="date" type="date" value="${todayInput()}" required>
+      <input name="date" type="date" value="${kasirDraft.date || todayInput()}" required>
       <div style="font-size:13px;font-weight:700;margin-top:4px;">Pembayaran</div>
       <select id="input-status" name="status">
-        <option value="lunas">Lunas (dibayar penuh)</option>
-        <option value="belum">Belum lunas (bayar sebagian / nanti)</option>
+        <option value="lunas" ${kasirDraft.status==='lunas'?'selected':''}>Lunas (dibayar penuh)</option>
+        <option value="belum" ${kasirDraft.status==='belum'?'selected':''}>Belum lunas</option>
       </select>
-      <input id="input-paid" name="paid" type="number" min="0" placeholder="Dibayar sekarang (Rp)" value="${subtotal}">
+      <input id="input-paid" name="paid" type="number" min="0" placeholder="Dibayar sekarang (Rp)" value="${kasirDraft.paid !== '' ? kasirDraft.paid : subtotal}">
       <div id="kasir-rest" style="font-size:12px;font-weight:600;"></div>
       <div style="font-size:11px;color:var(--sub);">Isi sebagian jika pembeli mencicil, sisanya tercatat sebagai tagihan. Metode pembayaran:</div>
       <select name="payment">
@@ -761,13 +777,22 @@ function attachHandlers(){
     if(!p || qty<=0){ return; }
     if(!price || price<=0){ priceInput.focus(); alert('Isi harga satuan dulu.'); return; }
     kasirCart.push({productId:p.id, name:p.name, qty, price});
+    saveKasirDraft();
     render();
   };
   document.querySelectorAll('[data-rm-cart]').forEach(b=>{
-    b.onclick = ()=>{ kasirCart.splice(Number(b.dataset.rmCart),1); render(); };
+    b.onclick = ()=>{ kasirCart.splice(Number(b.dataset.rmCart),1); saveKasirDraft(); render(); };
   });
 
   const fk = document.getElementById('form-kasir');
+  if(fk){
+    const nameEl = fk.querySelector('[name="buyerName"]');
+    const phoneEl = fk.querySelector('[name="buyerPhone"]');
+    const dateEl = fk.querySelector('[name="date"]');
+    if(nameEl) nameEl.oninput = ()=>{ kasirDraft.buyerName = nameEl.value; saveKasirDraft(); };
+    if(phoneEl) phoneEl.oninput = ()=>{ kasirDraft.buyerPhone = phoneEl.value; saveKasirDraft(); };
+    if(dateEl) dateEl.oninput = ()=>{ kasirDraft.date = dateEl.value; saveKasirDraft(); };
+  }
   if(fk) fk.onsubmit = async e=>{
     e.preventDefault();
     if(kasirCart.length===0){ alert('Tambahkan minimal 1 item ke keranjang.'); return; }
@@ -779,9 +804,8 @@ function attachHandlers(){
     const paid = Math.min(total, Math.max(0, Number(f.get('paid')||0)));
     const tx = { id: uid(), date: dateFromInput(f.get('date')), buyerName: f.get('buyerName').trim(), buyerPhone: f.get('buyerPhone').trim(), payment: f.get('payment'), items: kasirCart.map(it=>({...it})), subtotal, discount, shipping, total, paid };
     const saved = await saveTransaction(tx);
-    kasirCart = [];
     fk.reset();
-    if(saved) openNota(saved);
+    if(saved){ clearKasirDraft(); openNota(saved); }
   };
   const inputDiskon = document.getElementById('input-diskon');
   const inputOngkir = document.getElementById('input-ongkir');
@@ -800,6 +824,9 @@ function attachHandlers(){
       const rest = tot - Math.min(tot, Number(paidEl.value||0));
       restEl.textContent = rest>0 ? 'Sisa tagihan: '+fmtRp(rest) : 'Lunas';
       restEl.style.color = rest>0 ? 'var(--brand2)' : 'var(--accent-ink)';
+      kasirDraft.discount = inputDiskon.value; kasirDraft.shipping = inputOngkir.value;
+      kasirDraft.status = statusEl.value; kasirDraft.paid = paidEl.value;
+      saveKasirDraft();
     };
     inputDiskon.oninput = refresh; inputOngkir.oninput = refresh;
     paidEl.oninput = ()=>{ kasirPaidTouched = true; refresh(); };
