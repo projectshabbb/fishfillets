@@ -190,6 +190,12 @@ function renderDashboard(){
   const totalIn = state.cashflow.filter(c=>c.type==='in').reduce((s,c)=>s+c.amount,0);
   const totalOut = state.cashflow.filter(c=>c.type==='out').reduce((s,c)=>s+c.amount,0);
   const saldo = totalIn - totalOut;
+  const cashIn = state.cashflow.filter(c=>c.type==='in' && c.payment==='cash').reduce((s,c)=>s+c.amount,0);
+  const cashOut = state.cashflow.filter(c=>c.type==='out' && c.payment==='cash').reduce((s,c)=>s+c.amount,0);
+  const transferIn = state.cashflow.filter(c=>c.type==='in' && c.payment==='transfer').reduce((s,c)=>s+c.amount,0);
+  const transferOut = state.cashflow.filter(c=>c.type==='out' && c.payment==='transfer').reduce((s,c)=>s+c.amount,0);
+  const saldoCash = cashIn - cashOut;
+  const saldoRekening = transferIn - transferOut;
   const paidMap = {}; state.cashflow.forEach(c=>{ if(c.source==='transaction' && c.type==='in' && c.ref) paidMap[c.ref]=(paidMap[c.ref]||0)+c.amount; });
   const openTx = state.transactions.filter(t=>t.total-(paidMap[t.id]||0)>0);
   const piutang = openTx.reduce((s,t)=>s+t.total-(paidMap[t.id]||0),0);
@@ -206,9 +212,13 @@ function renderDashboard(){
       <div class="card" style="padding:12px;"><div style="font-size:11px;color:var(--sub);">Uang masuk</div><div style="font-size:17px;font-weight:800;color:var(--accent-ink);">${fmtRp(totalIn)}</div></div>
       <div class="card" style="padding:12px;"><div style="font-size:11px;color:var(--sub);">Uang keluar</div><div style="font-size:17px;font-weight:800;color:var(--danger-ink);">${fmtRp(totalOut)}</div></div>
     </div>
-    <div class="card" style="padding:14px;margin-bottom:16px;background:var(--brand);border:none;">
-      <div style="font-size:11px;color:#f0dede;">Saldo</div>
+    <div class="card" style="padding:14px;margin-bottom:10px;background:var(--brand);border:none;">
+      <div style="font-size:11px;color:#f0dede;">Total Saldo (Cash + Rekening)</div>
       <div style="font-size:24px;font-weight:800;color:#fff;">${fmtRp(saldo)}</div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">
+      <div class="card" style="padding:12px;"><div style="font-size:11px;color:var(--sub);">💵 Saldo Cash</div><div style="font-size:16px;font-weight:800;">${fmtRp(saldoCash)}</div></div>
+      <div class="card" style="padding:12px;"><div style="font-size:11px;color:var(--sub);">🏦 Saldo Rekening</div><div style="font-size:16px;font-weight:800;">${fmtRp(saldoRekening)}</div></div>
     </div>
     <div class="card" style="padding:12px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;">
       <div><div style="font-size:11px;color:var(--sub);">Piutang belum tertagih</div><div style="font-size:17px;font-weight:800;color:var(--brand2);">${fmtRp(piutang)}</div></div>
@@ -372,6 +382,11 @@ function renderKas(){
   const monthEntries = state.cashflow.filter(c=>monthKey(c.date)===state.kasMonth).sort((a,b)=>new Date(b.date)-new Date(a.date));
   const totalIn = monthEntries.filter(c=>c.type==='in').reduce((s,c)=>s+c.amount,0);
   const totalOut = monthEntries.filter(c=>c.type==='out').reduce((s,c)=>s+c.amount,0);
+  const labaRugi = totalIn - totalOut;
+  const [kY,kM] = state.kasMonth.split('-').map(Number);
+  const endOfMonth = new Date(kY, kM, 1);
+  const saldoSaatIni = state.cashflow.filter(c=>new Date(c.date) < endOfMonth).reduce((s,c)=>s+(c.type==='in'?c.amount:-c.amount),0);
+  const isCurrentOrPast = endOfMonth <= new Date(new Date().getFullYear(), new Date().getMonth()+1, 1);
   const rows = monthEntries.map(c=>`
     <div class="card" style="padding:12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
       <div>
@@ -388,10 +403,15 @@ function renderKas(){
       <div style="flex:1;text-align:center;font-weight:700;font-size:14px;">${monthLabel(state.kasMonth)}</div>
       <button id="kas-next" class="btn-secondary" style="padding:6px 12px;">&rsaquo;</button>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px;">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px;">
       <div class="card" style="padding:10px;"><div style="font-size:10px;color:var(--sub);">Masuk</div><div style="font-weight:800;font-size:13px;color:var(--accent-ink);">${fmtRp(totalIn)}</div></div>
       <div class="card" style="padding:10px;"><div style="font-size:10px;color:var(--sub);">Keluar</div><div style="font-weight:800;font-size:13px;color:var(--danger-ink);">${fmtRp(totalOut)}</div></div>
-      <div class="card" style="padding:10px;background:var(--brand);border:none;"><div style="font-size:10px;color:#f0dede;">Saldo</div><div style="font-weight:800;font-size:13px;color:#fff;">${fmtRp(totalIn-totalOut)}</div></div>
+      <div class="card" style="padding:10px;"><div style="font-size:10px;color:var(--sub);">${labaRugi>=0?'Laba':'Rugi'} bulan ini</div><div style="font-weight:800;font-size:13px;color:${labaRugi>=0?'var(--accent-ink)':'var(--danger-ink)'};">${fmtRp(Math.abs(labaRugi))}</div></div>
+    </div>
+    <div class="card" style="padding:14px;margin-bottom:16px;background:var(--brand);border:none;">
+      <div style="font-size:11px;color:#f0dede;">Saldo kas ${isCurrentOrPast ? 'per akhir' : 'hingga akhir'} ${monthLabel(state.kasMonth)}</div>
+      <div style="font-size:22px;font-weight:800;color:#fff;">${fmtRp(saldoSaatIni)}</div>
+      <div style="font-size:10px;color:#f0dede;margin-top:2px;">Saldo bulan lalu dibawa masuk, ditambah/dikurangi pemasukan-pengeluaran bulan ini</div>
     </div>
     <form id="form-kas" class="card" style="padding:14px;display:flex;flex-direction:column;gap:8px;margin-bottom:16px;">
       <select name="type">
