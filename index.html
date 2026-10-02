@@ -424,6 +424,8 @@ function renderKas(){
         <option value="cash">Cash</option>
         <option value="transfer">Transfer</option>
       </select>
+      <div style="font-size:11px;color:var(--sub);margin-top:2px;">Tanggal transaksi (ubah kalau lupa catat di hari yang sama)</div>
+      <input name="date" type="date" value="${todayInput()}" max="${todayInput()}" required>
       <button type="submit" class="btn-primary">Simpan</button>
     </form>
     <div style="font-size:13px;font-weight:700;margin-bottom:8px;">Catatan bulan ini</div>
@@ -861,8 +863,9 @@ function attachHandlers(){
   if(fkas) fkas.onsubmit = async e=>{
     e.preventDefault();
     const f = new FormData(fkas);
-    const entry = { id: uid(), date: new Date().toISOString(), type: f.get('type'), desc: f.get('desc').trim(), amount: Number(f.get('amount')), payment: f.get('payment'), source:'manual' };
+    const entry = { id: uid(), date: dateFromInput(f.get('date')), type: f.get('type'), desc: f.get('desc').trim(), amount: Number(f.get('amount')), payment: f.get('payment'), source:'manual' };
     if(!entry.desc || !entry.amount) return;
+    state.kasMonth = monthKey(entry.date);
     await saveCashflow(entry);
     fkas.reset();
   };
