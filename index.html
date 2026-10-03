@@ -144,6 +144,42 @@ const PHONE = "0851-8166-3261";
 const fmtRp = n => "Rp " + Number(n||0).toLocaleString('id-ID');
 const fmtDate = iso => { const d = new Date(iso); return d.toLocaleDateString('id-ID',{weekday:'long',day:'numeric',month:'long',year:'numeric'}); };
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,8);
+// Input uang: tampilan pakai titik ribuan ala Indonesia ("500.000"), nilai asli selalu angka murni.
+// Dipakai supaya ketik "500.000" tidak dibaca browser sebagai desimal (yang berarti 500).
+const rpParse = v => Number(String(v||'').replace(/\D/g,'')) || 0;
+const rpFormat = n => n ? Number(n).toLocaleString('id-ID') : '';
+function rpVal(elOrId){ const el = typeof elOrId==='string' ? document.getElementById(elOrId) : elOrId; return el ? rpParse(el.value) : 0; }
+function bindRp(el, onChange){
+  if(!el || el.dataset.rpBound) return;
+  el.dataset.rpBound = '1';
+  el.addEventListener('input', ()=>{
+    const n = rpParse(el.value);
+    el.value = rpFormat(n);
+    el.setSelectionRange(el.value.length, el.value.length);
+    if(onChange) onChange(n);
+  });
+}
+function bindAllRp(root){ (root||document).querySelectorAll('[data-rp]').forEach(el=>bindRp(el)); }
+
+// Draft otomatis untuk form-form sederhana (Produk, Kas, Opname), supaya isian belum-simpan
+// tidak hilang kalau pindah tab/aplikasi lain lalu balik lagi.
+let formDrafts = {};
+try{ formDrafts = JSON.parse(localStorage.getItem('ff_form_drafts')||'{}'); }catch(e){ formDrafts = {}; }
+function saveFormDrafts(){ try{ localStorage.setItem('ff_form_drafts', JSON.stringify(formDrafts)); }catch(e){} }
+function bindFormDraft(formEl, key, extraGetter){
+  if(!formEl || formEl.dataset.draftBound) return;
+  formEl.dataset.draftBound = '1';
+  const save = ()=>{
+    const data = {};
+    new FormData(formEl).forEach((v,k)=>{ data[k]=v; });
+    if(extraGetter) Object.assign(data, extraGetter());
+    formDrafts[key] = data;
+    saveFormDrafts();
+  };
+  formEl.addEventListener('input', save);
+  formEl.addEventListener('change', save);
+}
+function clearFormDraft(key){ delete formDrafts[key]; saveFormDrafts(); }
 const monthKey = iso => { const d = new Date(iso); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); };
 const monthLabel = key => { const [y,m] = key.split('-').map(Number); return new Date(y,m-1,1).toLocaleDateString('id-ID',{month:'long',year:'numeric'}); };
 const shiftMonth = (key, delta) => { const [y,m] = key.split('-').map(Number); const d = new Date(y, m-1+delta, 1); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); };
@@ -246,15 +282,15 @@ function renderProduk(){
     <h1 style="font-size:18px;font-weight:800;margin:0 0 2px;">Produk</h1>
     <p style="font-size:12px;color:var(--sub);margin:0 0 14px;">Ikan frozen, fillet &amp; utuh</p>
     <form id="form-produk" class="card" style="padding:14px;display:flex;flex-direction:column;gap:8px;margin-bottom:16px;">
-      <input name="name" placeholder="Nama produk (mis. Dori Fillet)" required>
+      <input name="name" placeholder="Nama produk (mis. Dori Fillet)" value="${esc(formDrafts.produk?.name||'')}" required>
       <div style="display:flex;gap:8px;">
         <select name="category" style="flex:1;">
-          <option value="fillet">Fillet</option>
-          <option value="utuh">Ikan Utuh</option>
+          <option value="fillet" ${formDrafts.produk?.category==='utuh'?'':'selected'}>Fillet</option>
+          <option value="utuh" ${formDrafts.produk?.category==='utuh'?'selected':''}>Ikan Utuh</option>
         </select>
-        <input name="unit" placeholder="Satuan (kg/pack)" value="kg" style="flex:1;">
+        <input name="unit" placeholder="Satuan (kg/pack)" value="${esc(formDrafts.produk?.unit ?? 'kg')}" style="flex:1;">
       </div>
-      <input name="stock" type="number" placeholder="Stok awal" value="0">
+      <input name="stock" type="number" placeholder="Stok awal" value="${formDrafts.produk?.stock ?? '0'}">
       <button type="submit" class="btn-primary">+ Tambah Produk</button>
     </form>
     ${rows}
@@ -264,7 +300,7 @@ function renderProduk(){
 // ---------- KASIR (Transaksi/Nota) ----------
 let kasirCart = [];
 let kasirPaidTouched = false;
-let kasirDraft = { buyerName:'', buyerPhone:'', discount:'0', shipping:'0', paid:'', status:'lunas', date:'' };
+let kasirDraft = { buyerName:'', buyerPhone:'', discount:0, shipping:0, paid:'', status:'lunas', date:'' };
 function loadKasirDraft(){
   try{
     const raw = localStorage.getItem('ff_kasir_draft');
@@ -277,7 +313,7 @@ function saveKasirDraft(){
 function clearKasirDraft(){
   try{ localStorage.removeItem('ff_kasir_draft'); }catch(e){}
   kasirCart = [];
-  kasirDraft = { buyerName:'', buyerPhone:'', discount:'0', shipping:'0', paid:'', status:'lunas', date:'' };
+  kasirDraft = { buyerName:'', buyerPhone:'', discount:0, shipping:0, paid:'', status:'lunas', date:'' };
 }
 loadKasirDraft();
 function renderKasir(){
@@ -300,7 +336,7 @@ function renderKasir(){
         <select id="cart-product">${options || '<option>Belum ada produk</option>'}</select>
         <div style="display:flex;gap:8px;">
           <input id="cart-qty" type="number" placeholder="Qty" value="1" min="1" style="flex:1;">
-          <input id="cart-price" type="number" placeholder="Harga satuan (Rp)" min="0" style="flex:1;">
+          <input id="cart-price" type="text" inputmode="numeric" data-rp placeholder="Harga satuan (Rp)" style="flex:1;">
         </div>
         <button id="btn-add-cart" class="btn-secondary">+ Tambah ke keranjang</button>
       </div>
@@ -313,8 +349,8 @@ function renderKasir(){
     <form id="form-kasir" class="card" style="padding:14px;display:flex;flex-direction:column;gap:8px;">
       <div style="font-size:13px;font-weight:700;">Diskon &amp; ongkos kirim (opsional)</div>
       <div style="display:flex;gap:8px;">
-        <input id="input-diskon" name="discount" type="number" placeholder="Diskon (Rp)" value="${kasirDraft.discount}" style="flex:1;">
-        <input id="input-ongkir" name="shipping" type="number" placeholder="Ongkir (Rp)" value="${kasirDraft.shipping}" style="flex:1;">
+        <input id="input-diskon" name="discount" type="text" inputmode="numeric" data-rp placeholder="Diskon (Rp)" value="${rpFormat(kasirDraft.discount)}" style="flex:1;">
+        <input id="input-ongkir" name="shipping" type="text" inputmode="numeric" data-rp placeholder="Ongkir (Rp)" value="${rpFormat(kasirDraft.shipping)}" style="flex:1;">
       </div>
       <div style="display:flex;justify-content:space-between;font-weight:800;font-size:15px;padding:6px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);">
         <span>Total</span><span id="kasir-total-preview">${fmtRp(subtotal)}</span>
@@ -329,7 +365,7 @@ function renderKasir(){
         <option value="lunas" ${kasirDraft.status==='lunas'?'selected':''}>Lunas (dibayar penuh)</option>
         <option value="belum" ${kasirDraft.status==='belum'?'selected':''}>Belum lunas</option>
       </select>
-      <input id="input-paid" name="paid" type="number" min="0" placeholder="Dibayar sekarang (Rp)" value="${kasirDraft.paid !== '' ? kasirDraft.paid : subtotal}">
+      <input id="input-paid" name="paid" type="text" inputmode="numeric" data-rp placeholder="Dibayar sekarang (Rp)" value="${kasirDraft.paid !== '' ? rpFormat(kasirDraft.paid) : rpFormat(subtotal)}">
       <div id="kasir-rest" style="font-size:12px;font-weight:600;"></div>
       <div style="font-size:11px;color:var(--sub);">Isi sebagian jika pembeli mencicil, sisanya tercatat sebagai tagihan. Metode pembayaran:</div>
       <select name="payment">
@@ -349,7 +385,7 @@ function renderOpname(){
         <div style="font-weight:600;font-size:13px;">${esc(p.name)}</div>
         <div style="font-size:11px;color:var(--sub);">Stok sistem: ${p.stock} ${esc(p.unit||'')}</div>
       </div>
-      <input type="number" data-opname-input="${p.id}" placeholder="${p.stock}" style="width:100px;flex-shrink:0;">
+      <input type="number" data-opname-input="${p.id}" placeholder="${p.stock}" value="${formDrafts.opname?.items?.[p.id] ?? ''}" style="width:100px;flex-shrink:0;">
     </div>`).join('') || `<div style="color:var(--sub);font-size:13px;">Belum ada produk. Tambah dulu di tab Produk.</div>`;
   const history = state.opname.slice().sort((a,b)=>new Date(b.date)-new Date(a.date));
   const historyRows = history.map(o=>`
@@ -369,7 +405,7 @@ function renderOpname(){
     <form id="form-opname" class="card" style="padding:14px;margin-bottom:16px;">
       <div style="font-size:13px;font-weight:700;margin-bottom:6px;">Input stok fisik (isi yang beda saja)</div>
       ${rows}
-      <input name="note" placeholder="Catatan (opsional)" style="margin-top:12px;">
+      <input name="note" placeholder="Catatan (opsional)" value="${esc(formDrafts.opname?.note||'')}" style="margin-top:12px;">
       <button type="submit" class="btn-primary" style="margin-top:12px;width:100%;">Simpan Opname</button>
     </form>
     <div style="font-size:13px;font-weight:700;margin-bottom:8px;">Riwayat opname</div>
@@ -413,19 +449,28 @@ function renderKas(){
       <div style="font-size:22px;font-weight:800;color:#fff;">${fmtRp(saldoSaatIni)}</div>
       <div style="font-size:10px;color:#f0dede;margin-top:2px;">Saldo bulan lalu dibawa masuk, ditambah/dikurangi pemasukan-pengeluaran bulan ini</div>
     </div>
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <div style="font-size:13px;font-weight:700;">🏧 Setor tunai ke rekening</div>
+      <div style="font-size:11px;color:var(--sub);margin:2px 0 10px;">Pakai ini kalau uang cash disetor lewat ATM/bank. Saldo Cash berkurang, Saldo Rekening bertambah, total saldo tidak berubah.</div>
+      <form id="form-setor" style="display:flex;flex-direction:column;gap:8px;">
+        <input name="amount" type="text" inputmode="numeric" data-rp placeholder="Jumlah disetor (Rp)" required>
+        <input name="date" type="date" value="${todayInput()}" max="${todayInput()}" required>
+        <button type="submit" class="btn-secondary">Catat Setoran</button>
+      </form>
+    </div>
     <form id="form-kas" class="card" style="padding:14px;display:flex;flex-direction:column;gap:8px;margin-bottom:16px;">
       <select name="type">
-        <option value="in">Pemasukan (mis. modal, piutang)</option>
-        <option value="out">Pengeluaran (mis. operasional, beli bahan)</option>
+        <option value="in" ${formDrafts.kas?.type==='out'?'':'selected'}>Pemasukan (mis. modal, piutang)</option>
+        <option value="out" ${formDrafts.kas?.type==='out'?'selected':''}>Pengeluaran (mis. operasional, beli bahan)</option>
       </select>
-      <input name="desc" placeholder="Keterangan" required>
-      <input name="amount" type="number" placeholder="Jumlah (Rp)" required>
+      <input name="desc" placeholder="Keterangan" value="${esc(formDrafts.kas?.desc||'')}" required>
+      <input name="amount" type="text" inputmode="numeric" data-rp placeholder="Jumlah (Rp)" value="${esc(formDrafts.kas?.amount||'')}" required>
       <select name="payment">
-        <option value="cash">Cash</option>
-        <option value="transfer">Transfer</option>
+        <option value="cash" ${formDrafts.kas?.payment==='transfer'?'':'selected'}>Cash</option>
+        <option value="transfer" ${formDrafts.kas?.payment==='transfer'?'selected':''}>Transfer</option>
       </select>
       <div style="font-size:11px;color:var(--sub);margin-top:2px;">Tanggal transaksi (ubah kalau lupa catat di hari yang sama)</div>
-      <input name="date" type="date" value="${todayInput()}" max="${todayInput()}" required>
+      <input name="date" type="date" value="${formDrafts.kas?.date || todayInput()}" max="${todayInput()}" required>
       <button type="submit" class="btn-primary">Simpan</button>
     </form>
     <div style="font-size:13px;font-weight:700;margin-bottom:8px;">Catatan bulan ini</div>
@@ -584,8 +629,8 @@ function syncEditDraft(){
   editDraft.date = g('edit-date').value;
   editDraft.buyerName = g('edit-buyer-name').value;
   editDraft.buyerPhone = g('edit-buyer-phone').value;
-  editDraft.discount = Number(g('edit-discount').value||0);
-  editDraft.shipping = Number(g('edit-shipping').value||0);
+  editDraft.discount = rpVal('edit-discount');
+  editDraft.shipping = rpVal('edit-shipping');
 }
 function editTotals(){
   const subtotal = editDraft.items.reduce((s,it)=>s+it.qty*it.price,0);
@@ -614,7 +659,7 @@ function renderEditNota(){
       </div>
       <div style="display:flex;gap:8px;margin-top:4px;">
         <input type="number" min="0" step="any" data-edit-qty="${i}" value="${it.qty}" placeholder="Qty" style="flex:1;">
-        <input type="number" min="0" data-edit-price="${i}" value="${it.price}" placeholder="Harga satuan" style="flex:1;">
+        <input type="text" inputmode="numeric" data-rp data-edit-price="${i}" value="${rpFormat(it.price)}" placeholder="Harga satuan" style="flex:1;">
       </div>
     </div>`).join('') || `<div style="color:var(--sub);font-size:13px;padding:8px 0;">Belum ada item.</div>`;
   const options = state.products.map(p=>`<option value="${p.id}">${esc(p.name)} (stok ${p.stock} ${esc(p.unit||'')})</option>`).join('');
@@ -637,15 +682,15 @@ function renderEditNota(){
           <select id="edit-new-product">${options || '<option>Belum ada produk</option>'}</select>
           <div style="display:flex;gap:8px;">
             <input id="edit-new-qty" type="number" min="0" step="any" value="1" placeholder="Qty" style="flex:1;">
-            <input id="edit-new-price" type="number" min="0" placeholder="Harga satuan (Rp)" style="flex:1;">
+            <input id="edit-new-price" type="text" inputmode="numeric" data-rp placeholder="Harga satuan (Rp)" style="flex:1;">
           </div>
           <button id="edit-add-item" class="btn-secondary">Tambah ke nota</button>
         </div>
       </div>
       <div class="card" style="padding:12px;margin-bottom:12px;">
         <div style="display:flex;gap:8px;">
-          <input id="edit-discount" type="number" min="0" value="${d.discount}" placeholder="Diskon (Rp)" style="flex:1;">
-          <input id="edit-shipping" type="number" min="0" value="${d.shipping}" placeholder="Ongkir (Rp)" style="flex:1;">
+          <input id="edit-discount" type="text" inputmode="numeric" data-rp value="${rpFormat(d.discount)}" placeholder="Diskon (Rp)" style="flex:1;">
+          <input id="edit-shipping" type="text" inputmode="numeric" data-rp value="${rpFormat(d.shipping)}" placeholder="Ongkir (Rp)" style="flex:1;">
         </div>
         <div style="display:flex;justify-content:space-between;font-size:13px;padding-top:10px;"><span>Subtotal</span><span id="edit-subtotal">${fmtRp(t.subtotal)}</span></div>
         <div style="display:flex;justify-content:space-between;font-weight:800;font-size:15px;padding-top:4px;"><span>Total</span><span id="edit-total">${fmtRp(t.total)}</span></div>
@@ -665,7 +710,7 @@ function renderEditNota(){
             </select>
           </div>
           <div style="display:flex;gap:8px;margin-top:6px;align-items:center;">
-            <input type="number" min="0" data-pay-amount="${i}" value="${p.amount}" placeholder="Jumlah dibayar (Rp)" style="flex:1;">
+            <input type="text" inputmode="numeric" data-rp data-pay-amount="${i}" value="${rpFormat(p.amount)}" placeholder="Jumlah dibayar (Rp)" style="flex:1;">
             ${(state.role==='owner' || !p.id) ? `<button data-pay-rm="${i}" style="color:var(--danger-ink);background:none;border:none;font-size:18px;">&times;</button>` : ''}
           </div>
         </div>`).join('') || '<div style="color:var(--sub);font-size:12px;padding:8px 0;">Belum ada pembayaran tercatat.</div>'}
@@ -685,7 +730,7 @@ function renderEditNota(){
     inp.oninput = ()=>{ d.items[Number(inp.dataset.editQty)].qty = Number(inp.value||0); refreshEditTotals(); };
   });
   document.querySelectorAll('[data-edit-price]').forEach(inp=>{
-    inp.oninput = ()=>{ d.items[Number(inp.dataset.editPrice)].price = Number(inp.value||0); refreshEditTotals(); };
+    inp.oninput = ()=>{ d.items[Number(inp.dataset.editPrice)].price = rpParse(inp.value); refreshEditTotals(); };
   });
   document.querySelectorAll('[data-edit-rm]').forEach(b=>{
     b.onclick = ()=>{ syncEditDraft(); d.items.splice(Number(b.dataset.editRm),1); renderEditNota(); };
@@ -700,7 +745,7 @@ function renderEditNota(){
   };
   document.querySelectorAll('[data-pay-date]').forEach(inp=>{ inp.oninput = ()=>{ d.payments[Number(inp.dataset.payDate)].date = inp.value; }; });
   document.querySelectorAll('[data-pay-method]').forEach(sel=>{ sel.onchange = ()=>{ d.payments[Number(sel.dataset.payMethod)].method = sel.value; }; });
-  document.querySelectorAll('[data-pay-amount]').forEach(inp=>{ inp.oninput = ()=>{ d.payments[Number(inp.dataset.payAmount)].amount = Number(inp.value||0); refreshEditTotals(); }; });
+  document.querySelectorAll('[data-pay-amount]').forEach(inp=>{ inp.oninput = ()=>{ d.payments[Number(inp.dataset.payAmount)].amount = rpParse(inp.value); refreshEditTotals(); }; });
   document.querySelectorAll('[data-pay-rm]').forEach(b=>{ b.onclick = ()=>{ syncEditDraft(); d.payments[Number(b.dataset.payRm)].del = true; renderEditNota(); }; });
   $('#edit-mark-lunas').onclick = ()=>{
     syncEditDraft();
@@ -720,7 +765,7 @@ function renderEditNota(){
     syncEditDraft();
     const p = state.products.find(p=>p.id===$('#edit-new-product').value);
     const qty = Number($('#edit-new-qty').value||0);
-    const price = Number($('#edit-new-price').value||0);
+    const price = rpVal('edit-new-price');
     if(!p || qty<=0){ alert('Pilih produk dan isi qty.'); return; }
     if(price<=0){ alert('Isi harga satuan dulu.'); return; }
     const existing = d.items.find(it=>it.productId===p.id && it.price===price);
@@ -728,6 +773,7 @@ function renderEditNota(){
     renderEditNota();
   };
   refreshEditTotals();
+  bindAllRp(document.getElementById('modal-root'));
   $('#edit-cancel').onclick = ()=> openNota(d.original);
   $('#edit-save').onclick = async ()=>{
     syncEditDraft();
@@ -780,12 +826,14 @@ function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;
 // ---------- HANDLERS ----------
 function attachHandlers(){
   const fp = document.getElementById('form-produk');
+  bindFormDraft(fp, 'produk');
   if(fp) fp.onsubmit = async e=>{
     e.preventDefault();
     const f = new FormData(fp);
     const data = { name: f.get('name').trim(), category: f.get('category'), unit: f.get('unit')||'kg', price: 0, stock: Number(f.get('stock')||0) };
     if(!data.name) return;
     await saveProduct(data);
+    clearFormDraft('produk');
     fp.reset();
   };
   document.querySelectorAll('[data-del-produk]').forEach(b=>{
@@ -797,7 +845,7 @@ function attachHandlers(){
     const sel = document.getElementById('cart-product');
     const qty = Number(document.getElementById('cart-qty').value || 1);
     const priceInput = document.getElementById('cart-price');
-    const price = Number(priceInput.value || 0);
+    const price = rpParse(priceInput.value);
     const p = state.products.find(p=>p.id===sel.value);
     if(!p || qty<=0){ return; }
     if(!price || price<=0){ priceInput.focus(); alert('Isi harga satuan dulu.'); return; }
@@ -823,10 +871,10 @@ function attachHandlers(){
     if(kasirCart.length===0){ alert('Tambahkan minimal 1 item ke keranjang.'); return; }
     const f = new FormData(fk);
     const subtotal = kasirCart.reduce((s,it)=>s+it.qty*it.price,0);
-    const discount = Number(f.get('discount')||0);
-    const shipping = Number(f.get('shipping')||0);
+    const discount = rpParse(f.get('discount'));
+    const shipping = rpParse(f.get('shipping'));
     const total = Math.max(0, subtotal - discount + shipping);
-    const paid = Math.min(total, Math.max(0, Number(f.get('paid')||0)));
+    const paid = Math.min(total, Math.max(0, rpParse(f.get('paid'))));
     const tx = { id: uid(), date: dateFromInput(f.get('date')), buyerName: f.get('buyerName').trim(), buyerPhone: f.get('buyerPhone').trim(), payment: f.get('payment'), items: kasirCart.map(it=>({...it})), subtotal, discount, shipping, total, paid };
     const saved = await saveTransaction(tx);
     fk.reset();
@@ -840,17 +888,17 @@ function attachHandlers(){
     const paidEl = document.getElementById('input-paid');
     const restEl = document.getElementById('kasir-rest');
     const statusEl = document.getElementById('input-status');
-    const calcTotal = ()=> Math.max(0, kasirCart.reduce((s,it)=>s+it.qty*it.price,0) - Number(inputDiskon.value||0) + Number(inputOngkir.value||0));
+    const calcTotal = ()=> Math.max(0, kasirCart.reduce((s,it)=>s+it.qty*it.price,0) - rpParse(inputDiskon.value) + rpParse(inputOngkir.value));
     const refresh = ()=>{
       const tot = calcTotal();
       totalPreview.textContent = fmtRp(tot);
-      if(statusEl.value==='lunas'){ paidEl.value = tot; paidEl.readOnly = true; }
-      else { paidEl.readOnly = false; if(!kasirPaidTouched) paidEl.value = 0; }
-      const rest = tot - Math.min(tot, Number(paidEl.value||0));
+      if(statusEl.value==='lunas'){ paidEl.value = rpFormat(tot); paidEl.readOnly = true; }
+      else { paidEl.readOnly = false; if(!kasirPaidTouched) paidEl.value = ''; }
+      const rest = tot - Math.min(tot, rpParse(paidEl.value));
       restEl.textContent = rest>0 ? 'Sisa tagihan: '+fmtRp(rest) : 'Lunas';
       restEl.style.color = rest>0 ? 'var(--brand2)' : 'var(--accent-ink)';
-      kasirDraft.discount = inputDiskon.value; kasirDraft.shipping = inputOngkir.value;
-      kasirDraft.status = statusEl.value; kasirDraft.paid = paidEl.value;
+      kasirDraft.discount = rpParse(inputDiskon.value); kasirDraft.shipping = rpParse(inputOngkir.value);
+      kasirDraft.status = statusEl.value; kasirDraft.paid = paidEl.value ? rpParse(paidEl.value) : '';
       saveKasirDraft();
     };
     inputDiskon.oninput = refresh; inputOngkir.oninput = refresh;
@@ -859,14 +907,25 @@ function attachHandlers(){
     refresh();
   }
 
+  const fsetor = document.getElementById('form-setor');
+  if(fsetor) fsetor.onsubmit = async e=>{
+    e.preventDefault();
+    const f = new FormData(fsetor);
+    const amount = rpParse(f.get('amount'));
+    if(!amount){ alert('Isi jumlah yang disetor.'); return; }
+    await transferCashToBank(amount, f.get('date'));
+    fsetor.reset();
+  };
   const fkas = document.getElementById('form-kas');
+  bindFormDraft(fkas, 'kas');
   if(fkas) fkas.onsubmit = async e=>{
     e.preventDefault();
     const f = new FormData(fkas);
-    const entry = { id: uid(), date: dateFromInput(f.get('date')), type: f.get('type'), desc: f.get('desc').trim(), amount: Number(f.get('amount')), payment: f.get('payment'), source:'manual' };
+    const entry = { id: uid(), date: dateFromInput(f.get('date')), type: f.get('type'), desc: f.get('desc').trim(), amount: rpParse(f.get('amount')), payment: f.get('payment'), source:'manual' };
     if(!entry.desc || !entry.amount) return;
     state.kasMonth = monthKey(entry.date);
     await saveCashflow(entry);
+    clearFormDraft('kas');
     fkas.reset();
   };
   const kasPrev = document.getElementById('kas-prev');
@@ -879,6 +938,11 @@ function attachHandlers(){
   if(riwayatNext) riwayatNext.onclick = ()=>{ state.riwayatMonth = shiftMonth(state.riwayatMonth,1); render(); };
 
   const fop = document.getElementById('form-opname');
+  bindFormDraft(fop, 'opname', ()=>{
+    const items = {};
+    document.querySelectorAll('[data-opname-input]').forEach(inp=>{ if(inp.value!=='') items[inp.dataset.opnameInput] = inp.value; });
+    return { items };
+  });
   if(fop) fop.onsubmit = async e=>{
     e.preventDefault();
     const f = new FormData(fop);
@@ -895,6 +959,7 @@ function attachHandlers(){
     if(items.length===0){ alert('Tidak ada perubahan stok yang diinput.'); return; }
     const record = { id: uid(), date: new Date().toISOString(), note: (f.get('note')||'').trim(), items };
     await saveOpname(record);
+    clearFormDraft('opname');
     fop.reset();
   };
 
@@ -904,6 +969,8 @@ function attachHandlers(){
       if(tx) openNota(tx);
     };
   });
+
+  bindAllRp(document.getElementById('view'));
 }
 
 document.querySelectorAll('.tab-btn[data-tab]').forEach(b=>{
@@ -1026,6 +1093,14 @@ async function cancelTransaction(tx){
   await fetchAll();
   closeNota();
   alert('Transaksi dibatalkan dan stok sudah dikembalikan.');
+}
+async function transferCashToBank(amount, dateStr){
+  const date = dateFromInput(dateStr);
+  const { error: e1 } = await sb.from('cashflow').insert({ date, type:'out', description:'Setor tunai ke rekening (ATM/bank)', amount, payment:'cash', source:'manual' });
+  const { error: e2 } = await sb.from('cashflow').insert({ date, type:'in', description:'Setoran tunai dari kas (ATM/bank)', amount, payment:'transfer', source:'manual' });
+  if(e1 || e2){ alert('Gagal mencatat setoran: '+(e1?.message||e2?.message)); return; }
+  state.kasMonth = monthKey(date);
+  await fetchAll();
 }
 async function saveCashflow(entry){
   const { error } = await sb.from('cashflow').insert({ date: entry.date, type: entry.type, description: entry.desc, amount: entry.amount, payment: entry.payment, source:'manual' });
