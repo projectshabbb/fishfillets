@@ -114,7 +114,6 @@
     <button class="tab-btn" data-tab="dashboard">📊<span>Dasbor</span></button>
     <button class="tab-btn" data-tab="produk">🐟<span>Produk</span></button>
     <button class="tab-btn" data-tab="kasir">🧾<span>Kasir</span></button>
-    <button class="tab-btn" data-tab="opname">📋<span>Opname</span></button>
     <button class="tab-btn" data-tab="kas">💰<span>Kas</span></button>
     <button class="tab-btn" data-tab="riwayat">🕘<span>Riwayat</span></button>
     <div id="user-badge" style="margin-top:auto;padding:8px 10px;font-size:10px;color:var(--sub);border-top:1px solid var(--line);"></div>
@@ -184,6 +183,15 @@ const monthKey = iso => { const d = new Date(iso); return d.getFullYear()+'-'+St
 const monthLabel = key => { const [y,m] = key.split('-').map(Number); return new Date(y,m-1,1).toLocaleDateString('id-ID',{month:'long',year:'numeric'}); };
 const shiftMonth = (key, delta) => { const [y,m] = key.split('-').map(Number); const d = new Date(y, m-1+delta, 1); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); };
 const nowMonth = () => monthKey(new Date().toISOString());
+const KAS_CATEGORIES = {
+  in: ['Saldo', 'Penjualan Produk'],
+  out: ['Pabrik', 'Fee Marketer', 'Ongkir Produk', 'Mas Dimas', 'Pak Syifa', 'Freezer', 'Lain-lain'],
+};
+function kasCategoryOptions(type, selected){
+  const list = KAS_CATEGORIES[type] || KAS_CATEGORIES.in;
+  return list.map(c=>`<option value="${esc(c)}" ${c===selected?'selected':''}>${esc(c)}</option>`).join('');
+}
+function kasCategoryOf(entry){ return entry.category || (entry.source==='transaction' ? 'Penjualan Produk' : 'Lainnya'); }
 const pad2 = n => String(n).padStart(2,'0');
 const toDateInput = iso => { const d = new Date(iso); return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); };
 const todayInput = () => toDateInput(new Date().toISOString());
@@ -206,7 +214,7 @@ const statusPill = key => key==='lunas'
   : key==='sebagian'
   ? '<span class="pill" style="background:rgba(201,150,47,.18);color:var(--brand2);">Sebagian</span>'
   : '<span class="pill" style="background:var(--danger);color:var(--danger-ink);">Belum bayar</span>';
-let state = { products: [], transactions: [], cashflow: [], opname: [], tab: 'dashboard', ready:false, role:'admin', kasMonth: nowMonth(), riwayatMonth: nowMonth() };
+let state = { products: [], transactions: [], cashflow: [], stockIn: [], tab: 'dashboard', ready:false, role:'admin', kasMonth: nowMonth(), riwayatMonth: nowMonth() };
 
 function render(){
   document.querySelectorAll('.tab-btn[data-tab]').forEach(b=>b.classList.toggle('active', b.dataset.tab===state.tab));
@@ -215,7 +223,6 @@ function render(){
   if(state.tab==='dashboard') el.innerHTML = renderDashboard();
   else if(state.tab==='produk') el.innerHTML = renderProduk();
   else if(state.tab==='kasir') el.innerHTML = renderKasir();
-  else if(state.tab==='opname') el.innerHTML = renderOpname();
   else if(state.tab==='kas') el.innerHTML = renderKas();
   else if(state.tab==='riwayat') el.innerHTML = renderRiwayat();
   attachHandlers();
@@ -266,35 +273,100 @@ function renderDashboard(){
 }
 
 // ---------- PRODUK ----------
+function totalStockIn(productId){ return state.stockIn.filter(s=>s.productId===productId).reduce((s,x)=>s+x.qty,0); }
 function renderProduk(){
   const rows = state.products.map(p=>`
-    <div class="card" style="padding:12px;display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-      <div>
-        <div style="font-weight:700;font-size:14px;">${esc(p.name)}</div>
-        <div style="font-size:12px;color:var(--sub);">${p.category==='fillet'?'Fillet':'Utuh'} &middot; satuan ${esc(p.unit||'pcs')}</div>
+    <div class="card" style="padding:12px;margin-bottom:8px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <div style="font-weight:700;font-size:14px;">${esc(p.name)}</div>
+          <div style="font-size:12px;color:var(--sub);">${p.category==='fillet'?'Fillet':'Utuh'} &middot; satuan ${esc(p.unit||'pcs')}</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-weight:800;">${p.stock}</div>
+          ${state.role==='owner' ? `<button data-del-produk="${p.id}" style="font-size:11px;color:var(--danger-ink);background:none;border:none;margin-top:2px;">Hapus</button>` : ''}
+        </div>
       </div>
-      <div style="text-align:right;">
-        <div style="font-weight:800;">${p.stock}</div>
-        ${state.role==='owner' ? `<button data-del-produk="${p.id}" style="font-size:11px;color:var(--danger-ink);background:none;border:none;margin-top:2px;">Hapus</button>` : ''}
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding-top:8px;border-top:1px solid var(--line);">
+        <div style="font-size:11px;color:var(--sub);">Total pernah masuk: <b style="color:var(--ink);">${totalStockIn(p.id)} ${esc(p.unit||'')}</b></div>
+        <button data-riwayat-produk="${p.id}" style="font-size:11px;color:var(--brand);background:none;border:none;font-weight:600;">Riwayat &rsaquo;</button>
       </div>
     </div>`).join('') || `<div style="color:var(--sub);font-size:13px;">Belum ada produk.</div>`;
+  const productOptionsForStockIn = state.products.map(p=>`<option value="${p.id}">${esc(p.name)} (stok saat ini: ${p.stock} ${esc(p.unit||'')})</option>`).join('');
   return `
     <h1 style="font-size:18px;font-weight:800;margin:0 0 2px;">Produk</h1>
-    <p style="font-size:12px;color:var(--sub);margin:0 0 14px;">Ikan frozen, fillet &amp; utuh</p>
-    <form id="form-produk" class="card" style="padding:14px;display:flex;flex-direction:column;gap:8px;margin-bottom:16px;">
-      <input name="name" placeholder="Nama produk (mis. Dori Fillet)" value="${esc(formDrafts.produk?.name||'')}" required>
-      <div style="display:flex;gap:8px;">
-        <select name="category" style="flex:1;">
-          <option value="fillet" ${formDrafts.produk?.category==='utuh'?'':'selected'}>Fillet</option>
-          <option value="utuh" ${formDrafts.produk?.category==='utuh'?'selected':''}>Ikan Utuh</option>
-        </select>
-        <input name="unit" placeholder="Satuan (kg/pack)" value="${esc(formDrafts.produk?.unit ?? 'kg')}" style="flex:1;">
-      </div>
-      <input name="stock" type="number" placeholder="Stok awal" value="${formDrafts.produk?.stock ?? '0'}">
-      <button type="submit" class="btn-primary">+ Tambah Produk</button>
-    </form>
+    <p style="font-size:12px;color:var(--sub);margin:0 0 14px;">Ikan frozen, fillet &amp; utuh &middot; stok &amp; riwayatnya</p>
+
+    <div class="card" style="padding:14px;margin-bottom:12px;">
+      <div style="font-size:13px;font-weight:700;margin-bottom:8px;">📥 Tambah Stok (barang masuk dari pabrik)</div>
+      <form id="form-stockin" style="display:flex;flex-direction:column;gap:8px;">
+        <select name="productId">${productOptionsForStockIn || '<option>Belum ada produk</option>'}</select>
+        <input name="qty" type="number" step="any" min="0" placeholder="Jumlah masuk" value="${formDrafts.stockin?.qty||''}" required>
+        <div style="font-size:11px;color:var(--sub);">Tanggal penerimaan barang (boleh diubah kalau beda hari dengan input)</div>
+        <input name="date" type="date" value="${formDrafts.stockin?.date || todayInput()}" max="${todayInput()}" required>
+        <input name="note" placeholder="Catatan (opsional, mis. dari supplier mana)" value="${esc(formDrafts.stockin?.note||'')}">
+        <button type="submit" class="btn-primary">+ Tambah Stok</button>
+      </form>
+    </div>
+
+    <details class="card" style="padding:14px;margin-bottom:16px;">
+      <summary style="font-size:13px;font-weight:700;cursor:pointer;">+ Produk baru (jenis ikan baru)</summary>
+      <form id="form-produk" style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">
+        <input name="name" placeholder="Nama produk (mis. Dori Fillet)" value="${esc(formDrafts.produk?.name||'')}" required>
+        <div style="display:flex;gap:8px;">
+          <select name="category" style="flex:1;">
+            <option value="fillet" ${formDrafts.produk?.category==='utuh'?'':'selected'}>Fillet</option>
+            <option value="utuh" ${formDrafts.produk?.category==='utuh'?'selected':''}>Ikan Utuh</option>
+          </select>
+          <input name="unit" placeholder="Satuan (kg/pack)" value="${esc(formDrafts.produk?.unit ?? 'kg')}" style="flex:1;">
+        </div>
+        <input name="stock" type="number" step="any" placeholder="Stok awal (opsional)" value="${formDrafts.produk?.stock ?? '0'}">
+        <div style="font-size:11px;color:var(--sub);">Tanggal diterima (kalau stok awal diisi)</div>
+        <input name="dateReceived" type="date" value="${formDrafts.produk?.dateReceived || todayInput()}" max="${todayInput()}">
+        <button type="submit" class="btn-primary">+ Simpan Produk Baru</button>
+      </form>
+    </details>
+
     ${rows}
   `;
+}
+
+function openProductHistory(p){
+  const inRows = state.stockIn.filter(s=>s.productId===p.id).map(s=>({ date:s.date, kind:'in', qty:s.qty, note:s.note }));
+  const outRows = [];
+  state.transactions.forEach(tx=>{
+    tx.items.filter(it=>it.productId===p.id).forEach(it=>{
+      outRows.push({ date:tx.date, kind:'out', qty:it.qty, buyer:tx.buyerName });
+    });
+  });
+  const all = [...inRows, ...outRows].sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const rows = all.map(r=>{
+    if(r.kind==='in'){
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);">
+        <div><div style="font-size:13px;font-weight:600;">${fmtDate(r.date)}</div>${r.note?`<div style="font-size:11px;color:var(--sub);">${esc(r.note)}</div>`:''}</div>
+        <div style="font-weight:800;color:var(--accent-ink);">+${r.qty} ${esc(p.unit||'')}</div>
+      </div>`;
+    }
+    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);">
+      <div><div style="font-size:13px;font-weight:600;">${fmtDate(r.date)}</div><div style="font-size:11px;color:var(--sub);">Terjual ke ${esc(r.buyer)}</div></div>
+      <div style="font-weight:800;color:var(--danger-ink);">-${r.qty} ${esc(p.unit||'')}</div>
+    </div>`;
+  }).join('') || `<div style="color:var(--sub);font-size:13px;padding:10px 0;">Belum ada riwayat untuk produk ini.</div>`;
+  document.getElementById('modal-root').innerHTML = `
+  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:flex-end;justify-content:center;">
+    <div style="background:var(--bg);width:100%;max-width:520px;max-height:85vh;overflow-y:auto;border-radius:16px 16px 0 0;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+        <div style="font-weight:800;">${esc(p.name)}</div>
+        <button id="close-history" style="background:none;border:none;font-size:20px;color:var(--sub);">&times;</button>
+      </div>
+      <div style="font-size:12px;color:var(--sub);margin-bottom:12px;">Stok saat ini: <b>${p.stock} ${esc(p.unit||'')}</b> &middot; Total pernah masuk: <b>${totalStockIn(p.id)} ${esc(p.unit||'')}</b></div>
+      ${rows}
+      <button id="close-history-2" class="btn-secondary" style="width:100%;margin-top:14px;">Tutup</button>
+    </div>
+  </div>`;
+  const close = ()=>{ document.getElementById('modal-root').innerHTML=''; };
+  document.getElementById('close-history').onclick = close;
+  document.getElementById('close-history-2').onclick = close;
 }
 
 // ---------- KASIR (Transaksi/Nota) ----------
@@ -377,42 +449,6 @@ function renderKasir(){
   `;
 }
 
-// ---------- STOCK OPNAME ----------
-function renderOpname(){
-  const rows = state.products.map(p=>`
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);">
-      <div style="flex:1;min-width:0;">
-        <div style="font-weight:600;font-size:13px;">${esc(p.name)}</div>
-        <div style="font-size:11px;color:var(--sub);">Stok sistem: ${p.stock} ${esc(p.unit||'')}</div>
-      </div>
-      <input type="number" data-opname-input="${p.id}" placeholder="${p.stock}" value="${formDrafts.opname?.items?.[p.id] ?? ''}" style="width:100px;flex-shrink:0;">
-    </div>`).join('') || `<div style="color:var(--sub);font-size:13px;">Belum ada produk. Tambah dulu di tab Produk.</div>`;
-  const history = state.opname.slice().sort((a,b)=>new Date(b.date)-new Date(a.date));
-  const historyRows = history.map(o=>`
-    <div class="card" style="padding:12px;margin-bottom:8px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <b style="font-size:13px;">${fmtDate(o.date)}</b>
-        <span style="font-size:11px;color:var(--sub);">${o.items.length} produk disesuaikan</span>
-      </div>
-      ${o.note?`<div style="font-size:12px;color:var(--sub);margin-top:2px;">${esc(o.note)}</div>`:''}
-      <div style="margin-top:8px;display:flex;flex-direction:column;gap:3px;">
-        ${o.items.map(it=>`<div style="font-size:12px;display:flex;justify-content:space-between;"><span>${esc(it.name)}</span><span style="color:${it.diff<0?'var(--danger-ink)':it.diff>0?'var(--accent-ink)':'var(--sub)'};font-weight:600;">${it.systemStock} &rarr; ${it.physicalStock} (${it.diff>0?'+':''}${it.diff})</span></div>`).join('')}
-      </div>
-    </div>`).join('') || `<div style="color:var(--sub);font-size:13px;">Belum ada riwayat opname.</div>`;
-  return `
-    <h1 style="font-size:18px;font-weight:800;margin:0 0 2px;">Stock Opname</h1>
-    <p style="font-size:12px;color:var(--sub);margin:0 0 14px;">Hitung stok fisik &amp; sesuaikan dengan sistem</p>
-    <form id="form-opname" class="card" style="padding:14px;margin-bottom:16px;">
-      <div style="font-size:13px;font-weight:700;margin-bottom:6px;">Input stok fisik (isi yang beda saja)</div>
-      ${rows}
-      <input name="note" placeholder="Catatan (opsional)" value="${esc(formDrafts.opname?.note||'')}" style="margin-top:12px;">
-      <button type="submit" class="btn-primary" style="margin-top:12px;width:100%;">Simpan Opname</button>
-    </form>
-    <div style="font-size:13px;font-weight:700;margin-bottom:8px;">Riwayat opname</div>
-    ${historyRows}
-  `;
-}
-
 // ---------- KAS (pemasukan/pengeluaran per bulan) ----------
 function renderKas(){
   const monthEntries = state.cashflow.filter(c=>monthKey(c.date)===state.kasMonth).sort((a,b)=>new Date(b.date)-new Date(a.date));
@@ -426,7 +462,7 @@ function renderKas(){
   const rows = monthEntries.map(c=>`
     <div class="card" style="padding:12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
       <div>
-        <div style="font-weight:700;font-size:13px;">${esc(c.desc)}</div>
+        <div style="font-weight:700;font-size:13px;">${esc(kasCategoryOf(c))}${c.desc?` &middot; ${esc(c.desc)}`:''}</div>
         <div style="font-size:11px;color:var(--sub);">${new Date(c.date).toLocaleDateString('id-ID',{day:'numeric',month:'short'})} &middot; <span class="pill" style="background:var(--accent);color:var(--accent-ink);">${c.payment==='cash'?'Cash':'Transfer'}</span></div>
       </div>
       <div style="font-weight:800;color:${c.type==='in'?'var(--accent-ink)':'var(--danger-ink)'};">${c.type==='in'?'+':'-'}${fmtRp(c.amount)}</div>
@@ -459,11 +495,12 @@ function renderKas(){
       </form>
     </div>
     <form id="form-kas" class="card" style="padding:14px;display:flex;flex-direction:column;gap:8px;margin-bottom:16px;">
-      <select name="type">
-        <option value="in" ${formDrafts.kas?.type==='out'?'':'selected'}>Pemasukan (mis. modal, piutang)</option>
-        <option value="out" ${formDrafts.kas?.type==='out'?'selected':''}>Pengeluaran (mis. operasional, beli bahan)</option>
+      <select name="type" id="kas-type">
+        <option value="in" ${formDrafts.kas?.type==='out'?'':'selected'}>Pemasukan</option>
+        <option value="out" ${formDrafts.kas?.type==='out'?'selected':''}>Pengeluaran</option>
       </select>
-      <input name="desc" placeholder="Keterangan" value="${esc(formDrafts.kas?.desc||'')}" required>
+      <select name="category" id="kas-category">${kasCategoryOptions(formDrafts.kas?.type||'in', formDrafts.kas?.category)}</select>
+      <input name="desc" placeholder="Keterangan (opsional)" value="${esc(formDrafts.kas?.desc||'')}">
       <input name="amount" type="text" inputmode="numeric" data-rp placeholder="Jumlah (Rp)" value="${esc(formDrafts.kas?.amount||'')}" required>
       <select name="payment">
         <option value="cash" ${formDrafts.kas?.payment==='transfer'?'':'selected'}>Cash</option>
@@ -473,6 +510,11 @@ function renderKas(){
       <input name="date" type="date" value="${formDrafts.kas?.date || todayInput()}" max="${todayInput()}" required>
       <button type="submit" class="btn-primary">Simpan</button>
     </form>
+    <div style="font-size:13px;font-weight:700;margin-bottom:8px;">📄 Laporan Keuangan Bulanan</div>
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <div style="font-size:12px;color:var(--sub);margin-bottom:10px;">Ringkasan kas per kategori untuk ${monthLabel(state.kasMonth)}, siap dikirim atau diarsipkan.</div>
+      <button id="btn-export-laporan" class="btn-primary" style="width:100%;">⬇ Unduh Laporan PDF</button>
+    </div>
     <div style="font-size:13px;font-weight:700;margin-bottom:8px;">Catatan bulan ini</div>
     ${rows}
   `;
@@ -798,6 +840,66 @@ function downloadBlob(blob, filename){
   URL.revokeObjectURL(url);
 }
 
+async function exportLaporanBulanan(monthKeyStr){
+  const [y,m] = monthKeyStr.split('-').map(Number);
+  const startOfMonth = new Date(y, m-1, 1);
+  const cumulativeBefore = boundary => state.cashflow.filter(c=>new Date(c.date) < boundary).reduce((s,c)=>s+(c.type==='in'?c.amount:-c.amount),0);
+  const saldoAwal = cumulativeBefore(startOfMonth);
+  const monthEntries = state.cashflow.filter(c=>monthKey(c.date)===monthKeyStr);
+  const groupBy = arr => {
+    const map = {};
+    arr.forEach(c=>{ const cat = kasCategoryOf(c); map[cat] = (map[cat]||0) + c.amount; });
+    return Object.entries(map).sort((a,b)=>b[1]-a[1]);
+  };
+  const inGroups = groupBy(monthEntries.filter(c=>c.type==='in'));
+  const outGroups = groupBy(monthEntries.filter(c=>c.type==='out'));
+  const totalIn = inGroups.reduce((s,[,v])=>s+v,0);
+  const totalOut = outGroups.reduce((s,[,v])=>s+v,0);
+  const saldoAkhir = saldoAwal + totalIn - totalOut;
+  const rowsIn = inGroups.map(([cat,amt])=>`<tr><td style="padding:6px 4px;border-bottom:1px solid #f0f0f0;">${esc(cat)}</td><td style="padding:6px 4px;text-align:right;border-bottom:1px solid #f0f0f0;">${fmtRp(amt)}</td><td style="border-bottom:1px solid #f0f0f0;"></td><td style="border-bottom:1px solid #f0f0f0;"></td></tr>`).join('') || `<tr><td colspan="4" style="padding:6px 4px;color:#999;">Tidak ada pemasukan bulan ini</td></tr>`;
+  const rowsOut = outGroups.map(([cat,amt])=>`<tr><td style="padding:6px 4px;border-bottom:1px solid #f0f0f0;">${esc(cat)}</td><td style="border-bottom:1px solid #f0f0f0;"></td><td style="padding:6px 4px;text-align:right;border-bottom:1px solid #f0f0f0;">${fmtRp(amt)}</td><td style="border-bottom:1px solid #f0f0f0;"></td></tr>`).join('') || `<tr><td colspan="4" style="padding:6px 4px;color:#999;">Tidak ada pengeluaran bulan ini</td></tr>`;
+  const html = `
+    <div style="width:700px;background:#fff;color:#1a1a1a;padding:26px;font-family:Poppins,Arial,sans-serif;">
+      <div style="border-bottom:2px solid #7a1518;padding-bottom:12px;margin-bottom:14px;">
+        <div style="font-weight:800;font-size:18px;color:#7a1518;">FISH FILLETS - SAB GROUP</div>
+        <div style="font-size:13px;color:#555;margin-top:2px;">Laporan Keuangan Bulanan &middot; ${monthLabel(monthKeyStr)}</div>
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead><tr style="background:#f3e9df;">
+          <th style="padding:7px 4px;text-align:left;">Keterangan</th>
+          <th style="padding:7px 4px;text-align:right;">Kas Masuk</th>
+          <th style="padding:7px 4px;text-align:right;">Kas Keluar</th>
+          <th style="padding:7px 4px;text-align:right;">Saldo</th>
+        </tr></thead>
+        <tbody>
+          <tr><td style="padding:8px 4px;font-weight:700;">Saldo Awal Bulan</td><td></td><td></td><td style="padding:8px 4px;text-align:right;font-weight:700;">${fmtRp(saldoAwal)}</td></tr>
+          <tr><td colspan="4" style="padding:12px 4px 4px;font-weight:800;color:#7a1518;">KAS MASUK</td></tr>
+          ${rowsIn}
+          <tr><td colspan="4" style="padding:12px 4px 4px;font-weight:800;color:#7a1518;">KAS KELUAR</td></tr>
+          ${rowsOut}
+          <tr style="background:#f3e9df;font-weight:800;border-top:2px solid #7a1518;"><td style="padding:9px 4px;">JUMLAH</td><td style="padding:9px 4px;text-align:right;">${fmtRp(totalIn)}</td><td style="padding:9px 4px;text-align:right;">${fmtRp(totalOut)}</td><td></td></tr>
+          <tr style="font-weight:800;"><td style="padding:9px 4px;">Saldo Akhir Bulan</td><td></td><td></td><td style="padding:9px 4px;text-align:right;color:${saldoAkhir>=0?'#1f7a3f':'#a3282c'};">${fmtRp(saldoAkhir)}</td></tr>
+        </tbody>
+      </table>
+      <div style="text-align:center;font-size:10px;color:#999;margin-top:18px;">Dicetak otomatis oleh aplikasi Fish Fillets - SAB Group</div>
+    </div>`;
+  const container = document.createElement('div');
+  container.style.cssText = 'position:fixed;left:-9999px;top:0;';
+  container.innerHTML = html;
+  document.body.appendChild(container);
+  const canvas = await html2canvas(container.firstElementChild, {scale:2, backgroundColor:'#ffffff'});
+  document.body.removeChild(container);
+  const imgData = canvas.toDataURL('image/png');
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF('p','mm','a4');
+  const pageW = pdf.internal.pageSize.getWidth();
+  const imgW = pageW - 20;
+  const imgH = canvas.height * imgW / canvas.width;
+  pdf.addImage(imgData, 'PNG', 10, 10, imgW, imgH);
+  const blob = pdf.output('blob');
+  downloadBlob(blob, `Laporan-Keuangan-${monthKeyStr}.pdf`);
+}
+
 async function exportNotaPng(tx){
   const node = document.getElementById('nota-print');
   const canvas = await html2canvas(node, {scale:2, backgroundColor:'#ffffff'});
@@ -830,7 +932,7 @@ function attachHandlers(){
   if(fp) fp.onsubmit = async e=>{
     e.preventDefault();
     const f = new FormData(fp);
-    const data = { name: f.get('name').trim(), category: f.get('category'), unit: f.get('unit')||'kg', price: 0, stock: Number(f.get('stock')||0) };
+    const data = { name: f.get('name').trim(), category: f.get('category'), unit: f.get('unit')||'kg', price: 0, stock: Number(f.get('stock')||0), dateReceived: f.get('dateReceived') };
     if(!data.name) return;
     await saveProduct(data);
     clearFormDraft('produk');
@@ -838,6 +940,25 @@ function attachHandlers(){
   };
   document.querySelectorAll('[data-del-produk]').forEach(b=>{
     b.onclick = async ()=>{ if(confirm('Hapus produk ini?')) await deleteProduct(b.dataset.delProduk); };
+  });
+
+  const fsi = document.getElementById('form-stockin');
+  bindFormDraft(fsi, 'stockin');
+  if(fsi) fsi.onsubmit = async e=>{
+    e.preventDefault();
+    const f = new FormData(fsi);
+    const productId = f.get('productId');
+    const qty = Number(f.get('qty')||0);
+    if(!productId || qty<=0) return;
+    await saveStockIn(productId, qty, f.get('date'), (f.get('note')||'').trim());
+    clearFormDraft('stockin');
+    fsi.reset();
+  };
+  document.querySelectorAll('[data-riwayat-produk]').forEach(b=>{
+    b.onclick = ()=>{
+      const p = state.products.find(p=>p.id===b.dataset.riwayatProduk);
+      if(p) openProductHistory(p);
+    };
   });
 
   const addCartBtn = document.getElementById('btn-add-cart');
@@ -918,11 +1039,14 @@ function attachHandlers(){
   };
   const fkas = document.getElementById('form-kas');
   bindFormDraft(fkas, 'kas');
+  const kasTypeEl = document.getElementById('kas-type');
+  const kasCatEl = document.getElementById('kas-category');
+  if(kasTypeEl && kasCatEl) kasTypeEl.onchange = ()=>{ kasCatEl.innerHTML = kasCategoryOptions(kasTypeEl.value); };
   if(fkas) fkas.onsubmit = async e=>{
     e.preventDefault();
     const f = new FormData(fkas);
-    const entry = { id: uid(), date: dateFromInput(f.get('date')), type: f.get('type'), desc: f.get('desc').trim(), amount: rpParse(f.get('amount')), payment: f.get('payment'), source:'manual' };
-    if(!entry.desc || !entry.amount) return;
+    const entry = { id: uid(), date: dateFromInput(f.get('date')), type: f.get('type'), category: f.get('category'), desc: (f.get('desc')||'').trim(), amount: rpParse(f.get('amount')), payment: f.get('payment'), source:'manual' };
+    if(!entry.category || !entry.amount) return;
     state.kasMonth = monthKey(entry.date);
     await saveCashflow(entry);
     clearFormDraft('kas');
@@ -936,32 +1060,9 @@ function attachHandlers(){
   if(riwayatPrev) riwayatPrev.onclick = ()=>{ state.riwayatMonth = shiftMonth(state.riwayatMonth,-1); render(); };
   const riwayatNext = document.getElementById('riwayat-next');
   if(riwayatNext) riwayatNext.onclick = ()=>{ state.riwayatMonth = shiftMonth(state.riwayatMonth,1); render(); };
+  const btnLaporan = document.getElementById('btn-export-laporan');
+  if(btnLaporan) btnLaporan.onclick = () => exportLaporanBulanan(state.kasMonth);
 
-  const fop = document.getElementById('form-opname');
-  bindFormDraft(fop, 'opname', ()=>{
-    const items = {};
-    document.querySelectorAll('[data-opname-input]').forEach(inp=>{ if(inp.value!=='') items[inp.dataset.opnameInput] = inp.value; });
-    return { items };
-  });
-  if(fop) fop.onsubmit = async e=>{
-    e.preventDefault();
-    const f = new FormData(fop);
-    const items = [];
-    document.querySelectorAll('[data-opname-input]').forEach(inp=>{
-      const val = inp.value;
-      if(val===''||val===null) return;
-      const p = state.products.find(p=>p.id===inp.dataset.opnameInput);
-      if(!p) return;
-      const physical = Number(val);
-      if(physical===p.stock) return;
-      items.push({ productId:p.id, name:p.name, systemStock:p.stock, physicalStock:physical, diff: physical - p.stock });
-    });
-    if(items.length===0){ alert('Tidak ada perubahan stok yang diinput.'); return; }
-    const record = { id: uid(), date: new Date().toISOString(), note: (f.get('note')||'').trim(), items };
-    await saveOpname(record);
-    clearFormDraft('opname');
-    fop.reset();
-  };
 
   document.querySelectorAll('[data-nota]').forEach(elm=>{
     elm.onclick = ()=>{
@@ -990,27 +1091,38 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 // ---------- MAPPING JS <-> KOLOM DATABASE ----------
 const rowToProduct = r => ({ id:r.id, name:r.name, category:r.category, unit:r.unit, price:Number(r.price), stock:Number(r.stock) });
 const rowToTransaction = r => ({ id:r.id, date:r.date, buyerName:r.buyer_name, buyerPhone:r.buyer_phone, payment:r.payment, items:r.items, subtotal:Number(r.subtotal), discount:Number(r.discount), shipping:Number(r.shipping), total:Number(r.total) });
-const rowToCashflow = r => ({ id:r.id, date:r.date, type:r.type, desc:r.description, amount:Number(r.amount), payment:r.payment, source:r.source, ref:r.ref });
-const rowToOpname = r => ({ id:r.id, date:r.date, note:r.note, items:r.items });
+const rowToCashflow = r => ({ id:r.id, date:r.date, type:r.type, desc:r.description, amount:Number(r.amount), payment:r.payment, source:r.source, ref:r.ref, category:r.category });
+const rowToStockIn = r => ({ id:r.id, productId:r.product_id, date:r.date, qty:Number(r.qty), note:r.note });
 
 async function fetchAll(){
-  const [{data:products}, {data:transactions}, {data:cashflow}, {data:opname}] = await Promise.all([
+  const [{data:products}, {data:transactions}, {data:cashflow}, {data:stockIn}] = await Promise.all([
     sb.from('products').select('*').order('name'),
     sb.from('transactions').select('*').order('date',{ascending:false}),
     sb.from('cashflow').select('*').order('date',{ascending:false}),
-    sb.from('opname').select('*').order('date',{ascending:false}),
+    sb.from('stock_in').select('*').order('date',{ascending:false}),
   ]);
   state.products = (products||[]).map(rowToProduct);
   state.transactions = (transactions||[]).map(rowToTransaction);
   state.cashflow = (cashflow||[]).map(rowToCashflow);
-  state.opname = (opname||[]).map(rowToOpname);
+  state.stockIn = (stockIn||[]).map(rowToStockIn);
   state.ready = true;
   render();
 }
 
 async function saveProduct(data){
-  const { error } = await sb.from('products').insert({ name:data.name, category:data.category, unit:data.unit, price:data.price, stock:data.stock });
+  const { data: inserted, error } = await sb.from('products').insert({ name:data.name, category:data.category, unit:data.unit, price:data.price, stock:data.stock }).select().single();
   if(error){ alert('Gagal menyimpan produk: '+error.message); return; }
+  if(data.stock > 0){
+    await sb.from('stock_in').insert({ product_id: inserted.id, date: dateFromInput(data.dateReceived), qty: data.stock, note: 'Stok awal' });
+  }
+  await fetchAll();
+}
+async function saveStockIn(productId, qty, dateStr, note){
+  const { error: e1 } = await sb.from('stock_in').insert({ product_id: productId, date: dateFromInput(dateStr), qty, note: note||null });
+  if(e1){ alert('Gagal mencatat stok masuk: '+e1.message); return; }
+  const p = state.products.find(p=>p.id===productId);
+  const { error: e2 } = await sb.from('products').update({ stock: (p?p.stock:0) + qty }).eq('id', productId);
+  if(e2){ alert('Stok masuk tercatat, tapi gagal update stok produk: '+e2.message); }
   await fetchAll();
 }
 async function deleteProduct(id){
@@ -1032,7 +1144,7 @@ async function saveTransaction(tx){
     if(!r || r.length===0) stockFail = true;
   }
   if(stockFail) alert('Nota tersimpan, tapi stok sebagian produk gagal dikurangi (kemungkinan izin database). Cek stok manual lewat Stock Opname.');
-  if(tx.paid>0) await sb.from('cashflow').insert({ date: tx.date, type:'in', description:`Penjualan - ${tx.buyerName}`, amount: tx.paid, payment: tx.payment, source:'transaction', ref: inserted.id });
+  if(tx.paid>0) await sb.from('cashflow').insert({ date: tx.date, type:'in', category:'Penjualan Produk', description:`Penjualan - ${tx.buyerName}`, amount: tx.paid, payment: tx.payment, source:'transaction', ref: inserted.id });
   await fetchAll();
   return rowToTransaction(inserted);
 }
@@ -1067,10 +1179,10 @@ async function updateTransaction(oldTx, d){
       const { data: r } = await sb.from('cashflow').delete().eq('id', p.id).select();
       if(!r || r.length===0) payFail = true;
     } else if(p.id){
-      const { data: r } = await sb.from('cashflow').update({ date: dateFromInput(p.date, p.origDate), description: desc, amount: p.amount, payment: p.method }).eq('id', p.id).select();
+      const { data: r } = await sb.from('cashflow').update({ date: dateFromInput(p.date, p.origDate), category:'Penjualan Produk', description: desc, amount: p.amount, payment: p.method }).eq('id', p.id).select();
       if(!r || r.length===0) payFail = true;
     } else if(!p.del){
-      const { error: e2 } = await sb.from('cashflow').insert({ date: dateFromInput(p.date), type:'in', description: desc, amount: p.amount, payment: p.method, source:'transaction', ref: oldTx.id });
+      const { error: e2 } = await sb.from('cashflow').insert({ date: dateFromInput(p.date), type:'in', category:'Penjualan Produk', description: desc, amount: p.amount, payment: p.method, source:'transaction', ref: oldTx.id });
       if(e2) payFail = true;
     }
   }
@@ -1096,26 +1208,17 @@ async function cancelTransaction(tx){
 }
 async function transferCashToBank(amount, dateStr){
   const date = dateFromInput(dateStr);
-  const { error: e1 } = await sb.from('cashflow').insert({ date, type:'out', description:'Setor tunai ke rekening (ATM/bank)', amount, payment:'cash', source:'manual' });
-  const { error: e2 } = await sb.from('cashflow').insert({ date, type:'in', description:'Setoran tunai dari kas (ATM/bank)', amount, payment:'transfer', source:'manual' });
+  const { error: e1 } = await sb.from('cashflow').insert({ date, type:'out', category:'Setor Tunai ke Rekening', description:'Setor tunai ke rekening (ATM/bank)', amount, payment:'cash', source:'manual' });
+  const { error: e2 } = await sb.from('cashflow').insert({ date, type:'in', category:'Setor Tunai ke Rekening', description:'Setoran tunai dari kas (ATM/bank)', amount, payment:'transfer', source:'manual' });
   if(e1 || e2){ alert('Gagal mencatat setoran: '+(e1?.message||e2?.message)); return; }
   state.kasMonth = monthKey(date);
   await fetchAll();
 }
 async function saveCashflow(entry){
-  const { error } = await sb.from('cashflow').insert({ date: entry.date, type: entry.type, description: entry.desc, amount: entry.amount, payment: entry.payment, source:'manual' });
+  const { error } = await sb.from('cashflow').insert({ date: entry.date, type: entry.type, category: entry.category, description: entry.desc, amount: entry.amount, payment: entry.payment, source:'manual' });
   if(error){ alert('Gagal menyimpan kas: '+error.message); return; }
   await fetchAll();
 }
-async function saveOpname(record){
-  const { error } = await sb.from('opname').insert({ date: record.date, note: record.note, items: record.items });
-  if(error){ alert('Gagal menyimpan opname: '+error.message); return; }
-  for(const it of record.items){
-    await sb.from('products').update({ stock: it.physicalStock }).eq('id', it.productId);
-  }
-  await fetchAll();
-}
-
 async function init(){
   state.ready = false;
   await fetchAll();
