@@ -203,6 +203,14 @@ const dateFromInput = (str, keepIso) => {
   return new Date(y, m-1, d, 12, 0, 0).toISOString();
 };
 
+function buyerDirectory(){
+  const byName = {};
+  state.transactions.slice().sort((a,b)=>new Date(a.date)-new Date(b.date)).forEach(t=>{
+    if(!t.buyerName) return;
+    byName[t.buyerName.trim().toLowerCase()] = { name: t.buyerName.trim(), phone: t.buyerPhone||'' };
+  });
+  return Object.values(byName);
+}
 function txPayments(txId){ return state.cashflow.filter(c=>c.ref===txId && c.source==='transaction' && c.type==='in').sort((a,b)=>new Date(a.date)-new Date(b.date)); }
 function txStatus(tx){
   const paid = txPayments(tx.id).reduce((s,c)=>s+c.amount,0);
@@ -428,7 +436,10 @@ function renderKasir(){
         <span>Total</span><span id="kasir-total-preview">${fmtRp(subtotal)}</span>
       </div>
       <div style="font-size:13px;font-weight:700;margin-top:4px;">Data pembeli</div>
-      <input name="buyerName" placeholder="Nama pembeli" value="${esc(kasirDraft.buyerName)}" required>
+      <div style="position:relative;">
+        <input id="kasir-buyer-name" name="buyerName" placeholder="Nama pembeli" value="${esc(kasirDraft.buyerName)}" autocomplete="off" required>
+        <div id="buyer-suggestions" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:10;background:var(--card);border:1px solid var(--line);border-radius:10px;margin-top:2px;max-height:160px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,.1);"></div>
+      </div>
       <input name="buyerPhone" placeholder="Nomor HP pembeli (opsional)" value="${esc(kasirDraft.buyerPhone)}">
       <div style="font-size:11px;color:var(--sub);margin-top:2px;">Tanggal nota &amp; pembayaran (ubah jika nota dibuat untuk tanggal pengiriman)</div>
       <input name="date" type="date" value="${kasirDraft.date || todayInput()}" required>
@@ -454,7 +465,6 @@ function renderKas(){
   const monthEntries = state.cashflow.filter(c=>monthKey(c.date)===state.kasMonth).sort((a,b)=>new Date(b.date)-new Date(a.date));
   const totalIn = monthEntries.filter(c=>c.type==='in').reduce((s,c)=>s+c.amount,0);
   const totalOut = monthEntries.filter(c=>c.type==='out').reduce((s,c)=>s+c.amount,0);
-  const labaRugi = totalIn - totalOut;
   const [kY,kM] = state.kasMonth.split('-').map(Number);
   const endOfMonth = new Date(kY, kM, 1);
   const saldoSaatIni = state.cashflow.filter(c=>new Date(c.date) < endOfMonth).reduce((s,c)=>s+(c.type==='in'?c.amount:-c.amount),0);
@@ -475,10 +485,9 @@ function renderKas(){
       <div style="flex:1;text-align:center;font-weight:700;font-size:14px;">${monthLabel(state.kasMonth)}</div>
       <button id="kas-next" class="btn-secondary" style="padding:6px 12px;">&rsaquo;</button>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px;">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
       <div class="card" style="padding:10px;"><div style="font-size:10px;color:var(--sub);">Masuk</div><div style="font-weight:800;font-size:13px;color:var(--accent-ink);">${fmtRp(totalIn)}</div></div>
       <div class="card" style="padding:10px;"><div style="font-size:10px;color:var(--sub);">Keluar</div><div style="font-weight:800;font-size:13px;color:var(--danger-ink);">${fmtRp(totalOut)}</div></div>
-      <div class="card" style="padding:10px;"><div style="font-size:10px;color:var(--sub);">${labaRugi>=0?'Laba':'Rugi'} bulan ini</div><div style="font-weight:800;font-size:13px;color:${labaRugi>=0?'var(--accent-ink)':'var(--danger-ink)'};">${fmtRp(Math.abs(labaRugi))}</div></div>
     </div>
     <div class="card" style="padding:14px;margin-bottom:16px;background:var(--brand);border:none;">
       <div style="font-size:11px;color:#f0dede;">Saldo kas ${isCurrentOrPast ? 'per akhir' : 'hingga akhir'} ${monthLabel(state.kasMonth)}</div>
@@ -513,7 +522,10 @@ function renderKas(){
     <div style="font-size:13px;font-weight:700;margin-bottom:8px;">📄 Laporan Keuangan Bulanan</div>
     <div class="card" style="padding:14px;margin-bottom:16px;">
       <div style="font-size:12px;color:var(--sub);margin-bottom:10px;">Ringkasan kas per kategori untuk ${monthLabel(state.kasMonth)}, siap dikirim atau diarsipkan.</div>
-      <button id="btn-export-laporan" class="btn-primary" style="width:100%;">⬇ Unduh Laporan PDF</button>
+      <div style="display:flex;gap:8px;">
+        <button id="btn-lihat-laporan" class="btn-secondary" style="flex:1;">👁 Lihat Laporan</button>
+        <button id="btn-export-laporan" class="btn-primary" style="flex:1;">⬇ Unduh PDF</button>
+      </div>
     </div>
     <div style="font-size:13px;font-weight:700;margin-bottom:8px;">Catatan bulan ini</div>
     ${rows}
@@ -840,7 +852,7 @@ function downloadBlob(blob, filename){
   URL.revokeObjectURL(url);
 }
 
-async function exportLaporanBulanan(monthKeyStr){
+function computeLaporanBulanan(monthKeyStr){
   const [y,m] = monthKeyStr.split('-').map(Number);
   const startOfMonth = new Date(y, m-1, 1);
   const cumulativeBefore = boundary => state.cashflow.filter(c=>new Date(c.date) < boundary).reduce((s,c)=>s+(c.type==='in'?c.amount:-c.amount),0);
@@ -856,6 +868,51 @@ async function exportLaporanBulanan(monthKeyStr){
   const totalIn = inGroups.reduce((s,[,v])=>s+v,0);
   const totalOut = outGroups.reduce((s,[,v])=>s+v,0);
   const saldoAkhir = saldoAwal + totalIn - totalOut;
+  return { saldoAwal, inGroups, outGroups, totalIn, totalOut, saldoAkhir };
+}
+
+function openLaporanModal(monthKeyStr){
+  const d = computeLaporanBulanan(monthKeyStr);
+  const rowIn = (cat,amt)=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px;"><span>${esc(cat)}</span><span style="color:var(--accent-ink);font-weight:600;">${fmtRp(amt)}</span></div>`;
+  const rowOut = (cat,amt)=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px;"><span>${esc(cat)}</span><span style="color:var(--danger-ink);font-weight:600;">${fmtRp(amt)}</span></div>`;
+  document.getElementById('modal-root').innerHTML = `
+  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:flex-end;justify-content:center;">
+    <div style="background:var(--bg);width:100%;max-width:520px;max-height:88vh;overflow-y:auto;border-radius:16px 16px 0 0;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+        <div style="font-weight:800;">Laporan Keuangan</div>
+        <button id="close-laporan" style="background:none;border:none;font-size:20px;color:var(--sub);">&times;</button>
+      </div>
+      <div style="font-size:12px;color:var(--sub);margin-bottom:14px;">${monthLabel(monthKeyStr)}</div>
+      <div class="card" style="padding:12px;margin-bottom:12px;display:flex;justify-content:space-between;">
+        <span style="font-size:13px;font-weight:700;">Saldo Awal Bulan</span>
+        <span style="font-weight:800;">${fmtRp(d.saldoAwal)}</span>
+      </div>
+      <div class="card" style="padding:12px;margin-bottom:12px;">
+        <div style="font-size:13px;font-weight:700;color:var(--brand);margin-bottom:6px;">KAS MASUK</div>
+        ${d.inGroups.map(([c,a])=>rowIn(c,a)).join('') || '<div style="color:var(--sub);font-size:12px;">Tidak ada pemasukan bulan ini.</div>'}
+        <div style="display:flex;justify-content:space-between;padding-top:8px;font-weight:800;font-size:13px;"><span>Jumlah</span><span>${fmtRp(d.totalIn)}</span></div>
+      </div>
+      <div class="card" style="padding:12px;margin-bottom:12px;">
+        <div style="font-size:13px;font-weight:700;color:var(--brand);margin-bottom:6px;">KAS KELUAR</div>
+        ${d.outGroups.map(([c,a])=>rowOut(c,a)).join('') || '<div style="color:var(--sub);font-size:12px;">Tidak ada pengeluaran bulan ini.</div>'}
+        <div style="display:flex;justify-content:space-between;padding-top:8px;font-weight:800;font-size:13px;"><span>Jumlah</span><span>${fmtRp(d.totalOut)}</span></div>
+      </div>
+      <div class="card" style="padding:14px;margin-bottom:14px;background:var(--brand);border:none;">
+        <div style="font-size:11px;color:#f0dede;">Saldo Akhir Bulan</div>
+        <div style="font-size:20px;font-weight:800;color:#fff;">${fmtRp(d.saldoAkhir)}</div>
+      </div>
+      <button id="btn-export-laporan-modal" class="btn-primary" style="width:100%;margin-bottom:8px;">⬇ Unduh Laporan PDF</button>
+      <button id="close-laporan-2" class="btn-secondary" style="width:100%;">Tutup</button>
+    </div>
+  </div>`;
+  const close = ()=>{ document.getElementById('modal-root').innerHTML=''; };
+  document.getElementById('close-laporan').onclick = close;
+  document.getElementById('close-laporan-2').onclick = close;
+  document.getElementById('btn-export-laporan-modal').onclick = () => exportLaporanBulanan(monthKeyStr);
+}
+
+async function exportLaporanBulanan(monthKeyStr){
+  const { saldoAwal, inGroups, outGroups, totalIn, totalOut, saldoAkhir } = computeLaporanBulanan(monthKeyStr);
   const rowsIn = inGroups.map(([cat,amt])=>`<tr><td style="padding:6px 4px;border-bottom:1px solid #f0f0f0;">${esc(cat)}</td><td style="padding:6px 4px;text-align:right;border-bottom:1px solid #f0f0f0;">${fmtRp(amt)}</td><td style="border-bottom:1px solid #f0f0f0;"></td><td style="border-bottom:1px solid #f0f0f0;"></td></tr>`).join('') || `<tr><td colspan="4" style="padding:6px 4px;color:#999;">Tidak ada pemasukan bulan ini</td></tr>`;
   const rowsOut = outGroups.map(([cat,amt])=>`<tr><td style="padding:6px 4px;border-bottom:1px solid #f0f0f0;">${esc(cat)}</td><td style="border-bottom:1px solid #f0f0f0;"></td><td style="padding:6px 4px;text-align:right;border-bottom:1px solid #f0f0f0;">${fmtRp(amt)}</td><td style="border-bottom:1px solid #f0f0f0;"></td></tr>`).join('') || `<tr><td colspan="4" style="padding:6px 4px;color:#999;">Tidak ada pengeluaran bulan ini</td></tr>`;
   const html = `
@@ -983,7 +1040,29 @@ function attachHandlers(){
     const nameEl = fk.querySelector('[name="buyerName"]');
     const phoneEl = fk.querySelector('[name="buyerPhone"]');
     const dateEl = fk.querySelector('[name="date"]');
-    if(nameEl) nameEl.oninput = ()=>{ kasirDraft.buyerName = nameEl.value; saveKasirDraft(); };
+    const suggestBox = document.getElementById('buyer-suggestions');
+    if(nameEl) nameEl.oninput = ()=>{
+      kasirDraft.buyerName = nameEl.value; saveKasirDraft();
+      const q = nameEl.value.trim().toLowerCase();
+      if(!q || !suggestBox){ if(suggestBox) suggestBox.style.display='none'; return; }
+      const matches = buyerDirectory().filter(b=>b.name.toLowerCase().includes(q)).slice(0,5);
+      if(matches.length===0){ suggestBox.style.display='none'; return; }
+      suggestBox.innerHTML = matches.map(b=>`<div data-pick-buyer="${esc(b.name)}" data-pick-phone="${esc(b.phone)}" style="padding:9px 12px;font-size:13px;cursor:pointer;border-bottom:1px solid var(--line);">
+        <div style="font-weight:600;">${esc(b.name)}</div>${b.phone?`<div style="font-size:11px;color:var(--sub);">${esc(b.phone)}</div>`:''}
+      </div>`).join('');
+      suggestBox.style.display = 'block';
+      suggestBox.querySelectorAll('[data-pick-buyer]').forEach(opt=>{
+        opt.onmousedown = (ev)=>{
+          ev.preventDefault();
+          nameEl.value = opt.dataset.pickBuyer;
+          kasirDraft.buyerName = opt.dataset.pickBuyer;
+          if(phoneEl && opt.dataset.pickPhone){ phoneEl.value = opt.dataset.pickPhone; kasirDraft.buyerPhone = opt.dataset.pickPhone; }
+          saveKasirDraft();
+          suggestBox.style.display = 'none';
+        };
+      });
+    };
+    if(nameEl) nameEl.onblur = ()=>{ setTimeout(()=>{ if(suggestBox) suggestBox.style.display='none'; }, 150); };
     if(phoneEl) phoneEl.oninput = ()=>{ kasirDraft.buyerPhone = phoneEl.value; saveKasirDraft(); };
     if(dateEl) dateEl.oninput = ()=>{ kasirDraft.date = dateEl.value; saveKasirDraft(); };
   }
@@ -1062,6 +1141,8 @@ function attachHandlers(){
   if(riwayatNext) riwayatNext.onclick = ()=>{ state.riwayatMonth = shiftMonth(state.riwayatMonth,1); render(); };
   const btnLaporan = document.getElementById('btn-export-laporan');
   if(btnLaporan) btnLaporan.onclick = () => exportLaporanBulanan(state.kasMonth);
+  const btnLihatLaporan = document.getElementById('btn-lihat-laporan');
+  if(btnLihatLaporan) btnLihatLaporan.onclick = () => openLaporanModal(state.kasMonth);
 
 
   document.querySelectorAll('[data-nota]').forEach(elm=>{
@@ -1075,8 +1156,9 @@ function attachHandlers(){
 }
 
 document.querySelectorAll('.tab-btn[data-tab]').forEach(b=>{
-  b.onclick = ()=>{ state.tab = b.dataset.tab; render(); };
+  b.onclick = ()=>{ state.tab = b.dataset.tab; try{ localStorage.setItem('ff_last_tab', state.tab); }catch(e){} render(); };
 });
+try{ const lastTab = localStorage.getItem('ff_last_tab'); if(lastTab) state.tab = lastTab; }catch(e){}
 
 // ---------- DB SYNC ----------
 // ==================================================================
@@ -1234,6 +1316,7 @@ function showSetPassword(){
 }
 async function showApp(user){
   isInviteOrRecovery = false;
+  appAlreadyRunning = true;
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('setpass-screen').style.display = 'none';
   document.getElementById('root').style.display = 'flex';
@@ -1307,10 +1390,22 @@ const logoutBtnMobile = document.getElementById('btn-logout-mobile');
 if(logoutBtnMobile) logoutBtnMobile.onclick = doLogout;
 
 
+// PENTING: Supabase mengecek ulang sesi setiap kali tab ini kembali aktif
+// (mis. setelah buka WhatsApp lalu balik lagi), dan tiap kali itu auth
+// listener ini ikut terpanggil lagi. Login/buat-password sudah memanggil
+// showApp() sendiri secara langsung, jadi listener ini CUKUP menangani
+// pemuatan sesi pertama kali saja — supaya tidak diam-diam me-render ulang
+// halaman dan menghapus isian form yang sedang diketik (nota, dll).
+let appAlreadyRunning = false;
 sb.auth.onAuthStateChange((event, session)=>{
-  if(session?.user && isInviteOrRecovery){ showSetPassword(); }
-  else if(session?.user){ showApp(session.user); }
-  else { showLogin(); }
+  if(session?.user && isInviteOrRecovery){ showSetPassword(); return; }
+  if(session?.user){
+    if(!appAlreadyRunning){ appAlreadyRunning = true; showApp(session.user); }
+    // sudah berjalan: abaikan event ini (token refresh/refokus tab), jangan render ulang
+  } else {
+    appAlreadyRunning = false;
+    showLogin();
+  }
 });
 </script>
 </body>
