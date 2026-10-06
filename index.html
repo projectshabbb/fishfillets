@@ -341,7 +341,7 @@ function renderProduk(){
 }
 
 function openProductHistory(p){
-  const inRows = state.stockIn.filter(s=>s.productId===p.id).map(s=>({ date:s.date, kind:'in', qty:s.qty, note:s.note, price:s.price }));
+  const inRows = state.stockIn.filter(s=>s.productId===p.id).map(s=>({ id:s.id, date:s.date, kind:'in', qty:s.qty, note:s.note, price:s.price }));
   const outRows = [];
   state.transactions.forEach(tx=>{
     tx.items.filter(it=>it.productId===p.id).forEach(it=>{
@@ -356,6 +356,7 @@ function openProductHistory(p){
         <div style="text-align:right;">
           <div style="font-weight:800;color:var(--accent-ink);">+${r.qty} ${esc(p.unit||'')}</div>
           ${r.price?`<div style="font-size:11px;color:var(--sub);">@ ${fmtRp(r.price)}</div>`:''}
+          ${state.role==='owner' ? `<div style="margin-top:3px;"><button data-edit-stockin="${r.id}" style="font-size:10px;color:var(--brand);background:none;border:none;font-weight:600;margin-right:6px;">Edit</button><button data-del-stockin="${r.id}" style="font-size:10px;color:var(--danger-ink);background:none;border:none;font-weight:600;">Hapus</button></div>` : ''}
         </div>
       </div>`;
     }
@@ -390,6 +391,20 @@ function openProductHistory(p){
   const close = ()=>{ document.getElementById('modal-root').innerHTML=''; };
   document.getElementById('close-history').onclick = close;
   document.getElementById('close-history-2').onclick = close;
+  document.querySelectorAll('[data-del-stockin]').forEach(b=>{
+    b.onclick = async ()=>{
+      if(!confirm('Hapus catatan stok masuk ini? Stok produk akan ikut dikurangi.')) return;
+      await deleteStockIn(b.dataset.delStockin, p.id);
+      const fresh = state.products.find(x=>x.id===p.id);
+      if(fresh) openProductHistory(fresh);
+    };
+  });
+  document.querySelectorAll('[data-edit-stockin]').forEach(b=>{
+    b.onclick = ()=>{
+      const row = state.stockIn.find(s=>s.id===b.dataset.editStockin);
+      if(row) openEditStockIn(row, p);
+    };
+  });
 }
 
 // ---------- KASIR (Transaksi/Nota) ----------
@@ -1301,6 +1316,62 @@ async function saveProduct(data){
     await sb.from('stock_in').insert({ product_id: inserted.id, date: dateFromInput(data.dateReceived), qty: data.stock, note: 'Stok awal' });
   }
   await fetchAll();
+}
+async function deleteStockIn(stockInId, productId){
+  const row = state.stockIn.find(s=>s.id===stockInId);
+  if(!row){ alert('Catatan tidak ditemukan.'); return; }
+  const { data: delRow, error } = await sb.from('stock_in').delete().eq('id', stockInId).select();
+  if(error || !delRow || delRow.length===0){
+    alert('Gagal menghapus. Pastikan SQL migration_edit_stockin.sql sudah dijalankan di Supabase (hanya owner yang boleh hapus).');
+    return;
+  }
+  const p = state.products.find(x=>x.id===productId);
+  if(p) await sb.from('products').update({ stock: Math.max(0, p.stock - row.qty) }).eq('id', productId);
+  await fetchAll();
+}
+async function updateStockIn(stockInId, productId, newQty, newPrice, newDateStr, newNote){
+  const row = state.stockIn.find(s=>s.id===stockInId);
+  if(!row) return false;
+  const { data: upd, error } = await sb.from('stock_in').update({ qty: newQty, price: newPrice||null, date: dateFromInput(newDateStr, row.date), note: newNote||null }).eq('id', stockInId).select();
+  if(error || !upd || upd.length===0){
+    alert('Gagal menyimpan perubahan. Pastikan SQL migration_edit_stockin.sql sudah dijalankan di Supabase (hanya owner yang boleh edit).');
+    return false;
+  }
+  const p = state.products.find(x=>x.id===productId);
+  const diff = newQty - row.qty;
+  if(p && diff!==0) await sb.from('products').update({ stock: Math.max(0, p.stock + diff) }).eq('id', productId);
+  await fetchAll();
+  return true;
+}
+function openEditStockIn(row, p){
+  document.getElementById('modal-root').innerHTML = `
+  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end;justify-content:center;">
+    <div style="background:var(--bg);width:100%;max-width:420px;border-radius:16px 16px 0 0;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <div style="font-weight:800;">Edit Stok Masuk</div>
+        <button id="close-esi" style="background:none;border:none;font-size:20px;color:var(--sub);">&times;</button>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <input id="esi-qty" type="number" step="any" min="0" value="${row.qty}" placeholder="Jumlah masuk">
+        <input id="esi-price" type="text" inputmode="numeric" data-rp value="${rpFormat(row.price)}" placeholder="Harga beli per satuan (Rp)">
+        <input id="esi-date" type="date" value="${toDateInput(row.date)}" max="${todayInput()}">
+        <input id="esi-note" value="${esc(row.note||'')}" placeholder="Catatan (opsional)">
+        <button id="esi-save" class="btn-primary">Simpan</button>
+      </div>
+    </div>
+  </div>`;
+  bindAllRp(document.getElementById('modal-root'));
+  const close = ()=>{ openProductHistory(state.products.find(x=>x.id===p.id)||p); };
+  document.getElementById('close-esi').onclick = close;
+  document.getElementById('esi-save').onclick = async ()=>{
+    const qty = Number(document.getElementById('esi-qty').value||0);
+    const price = rpVal('esi-price');
+    const dateStr = document.getElementById('esi-date').value;
+    const note = document.getElementById('esi-note').value.trim();
+    if(qty<=0){ alert('Jumlah harus lebih dari 0.'); return; }
+    const ok = await updateStockIn(row.id, p.id, qty, price, dateStr, note);
+    if(ok){ openProductHistory(state.products.find(x=>x.id===p.id)); }
+  };
 }
 async function saveStockIn(productId, qty, dateStr, note, price){
   const { error: e1 } = await sb.from('stock_in').insert({ product_id: productId, date: dateFromInput(dateStr), qty, note: note||null, price: price||null });
