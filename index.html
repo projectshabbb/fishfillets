@@ -209,11 +209,15 @@ function buyerDirectory(){
     if(!t.buyerName) return;
     byName[t.buyerName.trim().toLowerCase()] = { name: t.buyerName.trim(), phone: t.buyerPhone||'' };
   });
+  buyersExtra.forEach(b=>{ const k=(b.name||'').trim().toLowerCase(); if(k && !byName[k]) byName[k] = { name:b.name.trim(), phone:b.phone||'' }; });
   return Object.values(byName);
 }
+function isAdminOnly(){ return state.role!=='owner'; }
+function txPaymentsOf(tx){ return tx._pays || txPayments(tx.id); }
+let buyersExtra = [];
 function txPayments(txId){ return state.cashflow.filter(c=>c.ref===txId && c.source==='transaction' && c.type==='in').sort((a,b)=>new Date(a.date)-new Date(b.date)); }
 function txStatus(tx){
-  const paid = txPayments(tx.id).reduce((s,c)=>s+c.amount,0);
+  const paid = txPaymentsOf(tx).reduce((s,c)=>s+c.amount,0);
   const rest = Math.max(0, tx.total - paid);
   return { paid, rest, key: rest<=0 ? 'lunas' : (paid>0 ? 'sebagian' : 'belum') };
 }
@@ -224,7 +228,10 @@ const statusPill = key => key==='lunas'
   : '<span class="pill" style="background:var(--danger);color:var(--danger-ink);">Belum bayar</span>';
 let state = { products: [], transactions: [], cashflow: [], stockIn: [], tab: 'dashboard', ready:false, role:'admin', kasMonth: nowMonth(), riwayatMonth: nowMonth() };
 
+function allowedTabs(){ return isAdminOnly() ? ['produk','kasir'] : ['dashboard','produk','kasir','kas','riwayat']; }
 function render(){
+  if(!allowedTabs().includes(state.tab)) state.tab = isAdminOnly() ? 'produk' : 'dashboard';
+  document.querySelectorAll('.tab-btn[data-tab]').forEach(b=>{ b.style.display = allowedTabs().includes(b.dataset.tab) ? '' : 'none'; });
   document.querySelectorAll('.tab-btn[data-tab]').forEach(b=>b.classList.toggle('active', b.dataset.tab===state.tab));
   const el = document.getElementById('view');
   if(!state.ready){ el.innerHTML = '<div style="text-align:center;padding:60px 0;color:var(--sub);">Memuat data...</div>'; return; }
@@ -282,7 +289,22 @@ function renderDashboard(){
 
 // ---------- PRODUK ----------
 function totalStockIn(productId){ return state.stockIn.filter(s=>s.productId===productId).reduce((s,x)=>s+x.qty,0); }
+function renderProdukAdmin(){
+  const rows = state.products.map(p=>`
+    <div class="card" style="padding:12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <div style="font-weight:700;font-size:14px;">${esc(p.name)}</div>
+        <div style="font-size:12px;color:var(--sub);">${p.category==='fillet'?'Fillet':'Utuh'}</div>
+      </div>
+      <div style="text-align:right;"><div style="font-weight:800;font-size:18px;">${p.stock}</div><div style="font-size:11px;color:var(--sub);">${esc(p.unit||'pcs')} tersedia</div></div>
+    </div>`).join('') || `<div style="color:var(--sub);font-size:13px;">Belum ada produk.</div>`;
+  return `
+    <h1 style="font-size:18px;font-weight:800;margin:0 0 2px;">Stok Produk</h1>
+    <p style="font-size:12px;color:var(--sub);margin:0 0 14px;">Stok yang tersedia saat ini</p>
+    ${rows}`;
+}
 function renderProduk(){
+  if(isAdminOnly()) return renderProdukAdmin();
   const rows = state.products.map(p=>`
     <div class="card" style="padding:12px;margin-bottom:8px;">
       <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -365,6 +387,13 @@ function openProductHistory(p){
       <div style="font-weight:800;color:var(--danger-ink);">-${r.qty} ${esc(p.unit||'')}</div>
     </div>`;
   }).join('') || `<div style="color:var(--sub);font-size:13px;padding:10px 0;">Belum ada riwayat untuk produk ini.</div>`;
+  const expected = inRows.reduce((s,r)=>s+r.qty,0) - outRows.reduce((s,r)=>s+r.qty,0);
+  const diffStock = Math.round((p.stock - expected)*1000)/1000;
+  const mismatchHtml = diffStock!==0 ? `<div class="card" style="padding:12px;margin-bottom:12px;border:1px solid var(--danger-ink);">
+      <div style="font-size:12px;font-weight:700;color:var(--danger-ink);">⚠️ Stok tidak cocok dengan riwayat</div>
+      <div style="font-size:12px;margin-top:4px;">Riwayat (masuk − terjual) = <b>${expected}</b>, tetapi stok tercatat <b>${p.stock}</b> (selisih ${diffStock>0?'+':''}${diffStock}).</div>
+      ${state.role==='owner' ? `<button id="btn-sync-stock" class="btn-secondary" style="width:100%;margin-top:8px;">Samakan stok jadi ${expected}</button>` : `<div style="font-size:11px;color:var(--sub);margin-top:4px;">Hubungi owner untuk mencocokkan.</div>`}
+    </div>` : '';
   const priceMap = {};
   inRows.filter(r=>r.price).forEach(r=>{ priceMap[r.price] = (priceMap[r.price]||0) + r.qty; });
   const priceSummary = Object.entries(priceMap).sort((a,b)=>b[1]-a[1]).map(([price,qty])=>`
@@ -380,6 +409,7 @@ function openProductHistory(p){
         <button id="close-history" style="background:none;border:none;font-size:20px;color:var(--sub);">&times;</button>
       </div>
       <div style="font-size:12px;color:var(--sub);margin-bottom:12px;">Stok saat ini: <b>${p.stock} ${esc(p.unit||'')}</b> &middot; Total pernah masuk: <b>${totalStockIn(p.id)} ${esc(p.unit||'')}</b></div>
+      ${mismatchHtml}
       ${priceSummary ? `<div class="card" style="padding:12px;margin-bottom:12px;">
         <div style="font-size:12px;font-weight:700;margin-bottom:4px;">Ringkasan harga beli (sejak awal)</div>
         ${priceSummary}
@@ -391,6 +421,13 @@ function openProductHistory(p){
   const close = ()=>{ document.getElementById('modal-root').innerHTML=''; };
   document.getElementById('close-history').onclick = close;
   document.getElementById('close-history-2').onclick = close;
+  const sync = document.getElementById('btn-sync-stock');
+  if(sync) sync.onclick = async ()=>{
+    if(!confirm(`Ubah stok ${p.name} dari ${p.stock} menjadi ${expected} sesuai riwayat?`)) return;
+    await setStock(p.id, expected);
+    await fetchAll();
+    const fresh = state.products.find(x=>x.id===p.id); if(fresh) openProductHistory(fresh);
+  };
   document.querySelectorAll('[data-del-stockin]').forEach(b=>{
     b.onclick = async ()=>{
       if(!confirm('Hapus catatan stok masuk ini? Stok produk akan ikut dikurangi.')) return;
@@ -624,7 +661,7 @@ function openNota(tx){
   const discount = tx.discount || 0;
   const shipping = tx.shipping || 0;
   const st = txStatus(tx);
-  const pays = txPayments(tx.id);
+  const pays = txPaymentsOf(tx);
   const shortDate = iso => new Date(iso).toLocaleDateString('id-ID',{day:'numeric',month:'short',year:'numeric'});
   const payHtml = pays.length ? `<div style="margin-top:8px;font-size:12px;">${pays.map(p=>`<div style="display:flex;justify-content:space-between;padding:2px 0;color:#444;"><span>Dibayar ${shortDate(p.date)} (${p.payment==='cash'?'Cash':'Transfer'})</span><span>${fmtRp(p.amount)}</span></div>`).join('')}</div>` : '';
   const restHtml = st.rest>0 ? `<div style="display:flex;justify-content:space-between;padding-top:6px;margin-top:4px;border-top:1px dashed #ddd;font-weight:800;font-size:14px;color:#a3282c;"><span>SISA TAGIHAN</span><span>${fmtRp(st.rest)}</span></div>` : '';
@@ -684,8 +721,8 @@ function openNota(tx){
         <button id="btn-export-pdf" class="btn-primary" style="flex:1;">⬇ PDF</button>
         <button id="btn-export-png" class="btn-secondary" style="flex:1;">⬇ PNG</button>
       </div>
-      <button id="btn-surat-jalan" class="btn-secondary" style="width:100%;margin-top:8px;">🚚 Surat Jalan</button>
-      <button id="btn-edit-nota" class="btn-secondary" style="width:100%;margin-top:8px;">✏️ Edit Nota</button>
+      ${isAdminOnly() ? '' : `<button id="btn-surat-jalan" class="btn-secondary" style="width:100%;margin-top:8px;">🚚 Surat Jalan</button>
+      <button id="btn-edit-nota" class="btn-secondary" style="width:100%;margin-top:8px;">✏️ Edit Nota</button>`}
       ${(state.role==='owner' && st.rest>0) ? `<button id="btn-cancel-tx" style="width:100%;margin-top:8px;background:none;border:none;color:var(--danger-ink);font-size:13px;font-weight:600;padding:6px;">🗑️ Batalkan Transaksi</button>` : ''}
       <button id="close-nota-2" class="btn-secondary" style="width:100%;margin-top:8px;">Tutup</button>
     </div>
@@ -695,8 +732,8 @@ function openNota(tx){
   document.getElementById('close-nota-2').onclick = closeNota;
   document.getElementById('btn-export-pdf').onclick = () => exportNotaPdf(tx);
   document.getElementById('btn-export-png').onclick = () => exportNotaPng(tx);
-  document.getElementById('btn-edit-nota').onclick = () => openEditNota(tx);
-  document.getElementById('btn-surat-jalan').onclick = () => openSuratJalan(tx);
+  const bEdit = document.getElementById('btn-edit-nota'); if(bEdit) bEdit.onclick = () => openEditNota(tx);
+  const bSj = document.getElementById('btn-surat-jalan'); if(bSj) bSj.onclick = () => openSuratJalan(tx);
   const btnCancelTx = document.getElementById('btn-cancel-tx');
   if(btnCancelTx) btnCancelTx.onclick = () => cancelTransaction(tx);
 }
@@ -1125,7 +1162,11 @@ function attachHandlers(){
     const qty = Number(f.get('qty')||0);
     const price = rpParse(f.get('price'));
     if(!productId || qty<=0) return;
-    await saveStockIn(productId, qty, f.get('date'), (f.get('note')||'').trim(), price);
+    if(window.__busyStockIn) return;
+    window.__busyStockIn = true;
+    const btn = fsi.querySelector('button[type=submit]'); if(btn){ btn.disabled = true; btn.textContent = 'Menyimpan...'; }
+    try{ await saveStockIn(productId, qty, f.get('date'), (f.get('note')||'').trim(), price); }
+    finally{ window.__busyStockIn = false; }
     clearFormDraft('stockin');
     fsi.reset();
   };
@@ -1194,7 +1235,11 @@ function attachHandlers(){
     const total = Math.max(0, subtotal - discount + shipping);
     const paid = Math.min(total, Math.max(0, rpParse(f.get('paid'))));
     const tx = { id: uid(), date: dateFromInput(f.get('date')), buyerName: f.get('buyerName').trim(), buyerPhone: f.get('buyerPhone').trim(), payment: f.get('payment'), items: kasirCart.map(it=>({...it})), subtotal, discount, shipping, total, paid };
-    const saved = await saveTransaction(tx);
+    if(window.__busyTx) return;
+    window.__busyTx = true;
+    const sbtn = fk.querySelector('button[type=submit]'); if(sbtn){ sbtn.disabled = true; }
+    let saved = null;
+    try{ saved = await saveTransaction(tx); } finally { window.__busyTx = false; }
     fk.reset();
     if(saved){ clearKasirDraft(); openNota(saved); }
   };
@@ -1295,6 +1340,18 @@ const rowToCashflow = r => ({ id:r.id, date:r.date, type:r.type, desc:r.descript
 const rowToStockIn = r => ({ id:r.id, productId:r.product_id, date:r.date, qty:Number(r.qty), note:r.note, price: r.price!=null ? Number(r.price) : null });
 
 async function fetchAll(){
+  if(isAdminOnly()){
+    const [{data:products}, {data:buyers}] = await Promise.all([
+      sb.from('products').select('*').order('name'),
+      sb.from('buyers').select('*'),
+    ]);
+    state.products = (products||[]).map(rowToProduct);
+    buyersExtra = buyers || [];
+    state.transactions = []; state.cashflow = []; state.stockIn = [];
+    state.ready = true;
+    render();
+    return;
+  }
   const [{data:products}, {data:transactions}, {data:cashflow}, {data:stockIn}] = await Promise.all([
     sb.from('products').select('*').order('name'),
     sb.from('transactions').select('*').order('date',{ascending:false}),
@@ -1317,6 +1374,16 @@ async function saveProduct(data){
   }
   await fetchAll();
 }
+async function adjustStock(productId, delta){
+  const { data: cur, error: e0 } = await sb.from('products').select('stock').eq('id', productId).single();
+  if(e0 || !cur) return false;
+  const { data: r } = await sb.from('products').update({ stock: Math.max(0, Number(cur.stock) + delta) }).eq('id', productId).select();
+  return !!(r && r.length);
+}
+async function setStock(productId, value){
+  const { data: r } = await sb.from('products').update({ stock: Math.max(0, value) }).eq('id', productId).select();
+  return !!(r && r.length);
+}
 async function deleteStockIn(stockInId, productId){
   const row = state.stockIn.find(s=>s.id===stockInId);
   if(!row){ alert('Catatan tidak ditemukan.'); return; }
@@ -1325,8 +1392,7 @@ async function deleteStockIn(stockInId, productId){
     alert('Gagal menghapus. Pastikan SQL migration_edit_stockin.sql sudah dijalankan di Supabase (hanya owner yang boleh hapus).');
     return;
   }
-  const p = state.products.find(x=>x.id===productId);
-  if(p) await sb.from('products').update({ stock: Math.max(0, p.stock - row.qty) }).eq('id', productId);
+  await adjustStock(productId, -row.qty);
   await fetchAll();
 }
 async function updateStockIn(stockInId, productId, newQty, newPrice, newDateStr, newNote){
@@ -1337,9 +1403,8 @@ async function updateStockIn(stockInId, productId, newQty, newPrice, newDateStr,
     alert('Gagal menyimpan perubahan. Pastikan SQL migration_edit_stockin.sql sudah dijalankan di Supabase (hanya owner yang boleh edit).');
     return false;
   }
-  const p = state.products.find(x=>x.id===productId);
   const diff = newQty - row.qty;
-  if(p && diff!==0) await sb.from('products').update({ stock: Math.max(0, p.stock + diff) }).eq('id', productId);
+  if(diff!==0) await adjustStock(productId, diff);
   await fetchAll();
   return true;
 }
@@ -1376,9 +1441,8 @@ function openEditStockIn(row, p){
 async function saveStockIn(productId, qty, dateStr, note, price){
   const { error: e1 } = await sb.from('stock_in').insert({ product_id: productId, date: dateFromInput(dateStr), qty, note: note||null, price: price||null });
   if(e1){ alert('Gagal mencatat stok masuk: '+e1.message); return; }
-  const p = state.products.find(p=>p.id===productId);
-  const { error: e2 } = await sb.from('products').update({ stock: (p?p.stock:0) + qty }).eq('id', productId);
-  if(e2){ alert('Stok masuk tercatat, tapi gagal update stok produk: '+e2.message); }
+  const okStock = await adjustStock(productId, qty);
+  if(!okStock){ alert('Stok masuk tercatat, tapi gagal update stok produk. Cek lewat Riwayat produk > Cocokkan stok.'); }
   await fetchAll();
 }
 async function deleteProduct(id){
@@ -1387,6 +1451,21 @@ async function deleteProduct(id){
   await fetchAll();
 }
 async function saveTransaction(tx){
+  const { data: rpcRow, error: rpcErr } = await sb.rpc('create_nota', {
+    p_date: tx.date, p_buyer_name: tx.buyerName, p_buyer_phone: tx.buyerPhone, p_payment: tx.payment,
+    p_items: tx.items, p_subtotal: tx.subtotal, p_discount: tx.discount, p_shipping: tx.shipping,
+    p_total: tx.total, p_paid: tx.paid||0
+  });
+  if(!rpcErr && rpcRow){
+    const t = rowToTransaction(rpcRow);
+    const paid = Math.min(tx.total, Math.max(0, tx.paid||0));
+    t._pays = paid>0 ? [{ date: tx.date, amount: paid, payment: tx.payment }] : [];
+    await fetchAll();
+    return t;
+  }
+  const fnMissing = rpcErr && (rpcErr.code==='PGRST202' || /could not find the function|does not exist/i.test(rpcErr.message||''));
+  if(!fnMissing){ alert('Gagal menyimpan nota: '+(rpcErr?.message||'tidak diketahui')); return null; }
+  // cadangan (sebelum SQL admin terbatas dijalankan): cara lama
   const { data: inserted, error } = await sb.from('transactions').insert({
     date: tx.date, buyer_name: tx.buyerName, buyer_phone: tx.buyerPhone, payment: tx.payment,
     items: tx.items, subtotal: tx.subtotal, discount: tx.discount, shipping: tx.shipping, total: tx.total
@@ -1394,10 +1473,8 @@ async function saveTransaction(tx){
   if(error){ alert('Gagal menyimpan transaksi: '+error.message); return null; }
   let stockFail = false;
   for(const it of tx.items){
-    const p = state.products.find(p=>p.id===it.productId);
-    if(!p) continue;
-    const { data: r } = await sb.from('products').update({ stock: Math.max(0, p.stock - it.qty) }).eq('id', p.id).select();
-    if(!r || r.length===0) stockFail = true;
+    const ok = await adjustStock(it.productId, -it.qty);
+    if(!ok) stockFail = true;
   }
   if(stockFail) alert('Nota tersimpan, tapi stok sebagian produk gagal dikurangi (kemungkinan izin database). Cek stok manual lewat Stock Opname.');
   if(tx.paid>0) await sb.from('cashflow').insert({ date: tx.date, type:'in', category:'Penjualan Produk', description:`Penjualan - ${tx.buyerName}`, amount: tx.paid, payment: tx.payment, source:'transaction', ref: inserted.id });
@@ -1424,8 +1501,7 @@ async function updateTransaction(oldTx, d){
   d.items.forEach(it=>{ diffByProduct[it.productId] = (diffByProduct[it.productId]||0) - it.qty; });
   for(const [pid, diff] of Object.entries(diffByProduct)){
     if(!diff) continue;
-    const p = state.products.find(p=>p.id===pid);
-    if(p) await sb.from('products').update({ stock: Math.max(0, p.stock + diff) }).eq('id', pid);
+    await adjustStock(pid, diff);
   }
   // pembayaran = baris kas yang terhubung ke nota ini
   let payFail = false;
@@ -1450,8 +1526,7 @@ async function cancelTransaction(tx){
   if(!confirm(`Batalkan nota ${tx.buyerName} senilai ${fmtRp(tx.total)}? Stok akan dikembalikan dan nota ini dihapus permanen.`)) return;
   const { data: cf } = await sb.from('cashflow').delete().eq('ref', tx.id).eq('source','transaction').select();
   for(const it of tx.items){
-    const p = state.products.find(p=>p.id===it.productId);
-    if(p) await sb.from('products').update({ stock: p.stock + it.qty }).eq('id', p.id);
+    await adjustStock(it.productId, it.qty);
   }
   const { data: delTx, error } = await sb.from('transactions').delete().eq('id', tx.id).select();
   if(error || !delTx || delTx.length===0){
