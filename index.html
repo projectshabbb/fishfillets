@@ -306,7 +306,7 @@ function renderProdukAdmin(){
 }
 async function openProductHistoryAdmin(p){
   const { data, error } = await sb.rpc('product_history', { p_product_id: p.id });
-  if(error || !data){ alert('Riwayat belum bisa dibuka. Minta owner menjalankan SQL migration_riwayat_admin.sql di Supabase.'); return; }
+  if(error || !data){ alert('Riwayat belum bisa dibuka. Minta owner menjalankan SQL migration_riwayat_admin.sql di Supabase.' + (error ? '\n\nDetail: '+(error.message||error.code) : '')); return; }
   const all = [...(data.in||[]).map(r=>({...r,kind:'in'})), ...(data.out||[]).map(r=>({...r,kind:'out'}))].sort((a,b)=>new Date(b.date)-new Date(a.date));
   const totalIn = (data.in||[]).reduce((s,r)=>s+Number(r.qty),0);
   const rows = all.map(r=> r.kind==='in'
