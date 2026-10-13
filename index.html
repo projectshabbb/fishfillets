@@ -215,6 +215,7 @@ function buyerDirectory(){
 function isAdminOnly(){ return state.role!=='owner'; }
 function txPaymentsOf(tx){ return tx._pays || txPayments(tx.id); }
 let buyersExtra = [];
+let stockTotalsAdmin = null;
 function txPayments(txId){ return state.cashflow.filter(c=>c.ref===txId && c.source==='transaction' && c.type==='in').sort((a,b)=>new Date(a.date)-new Date(b.date)); }
 function txStatus(tx){
   const paid = txPaymentsOf(tx).reduce((s,c)=>s+c.amount,0);
@@ -295,6 +296,7 @@ function renderProdukAdmin(){
       <div>
         <div style="font-weight:700;font-size:14px;">${esc(p.name)}</div>
         <div style="font-size:12px;color:var(--sub);">${p.category==='fillet'?'Fillet':'Utuh'}</div>
+        ${stockTotalsAdmin ? `<div style="font-size:11px;color:var(--sub);margin-top:4px;">Total pernah masuk: <b style="color:var(--ink);">${Number(stockTotalsAdmin[p.id]||0)} ${esc(p.unit||'')}</b></div>` : ''}
       </div>
       <div style="text-align:right;"><div style="font-weight:800;font-size:18px;">${p.stock}</div><div style="font-size:11px;color:var(--sub);">${esc(p.unit||'pcs')} tersedia</div>
         <button data-riwayat-admin="${p.id}" style="font-size:11px;color:var(--brand);background:none;border:none;font-weight:600;margin-top:2px;">Riwayat &rsaquo;</button></div>
@@ -1377,11 +1379,13 @@ const rowToStockIn = r => ({ id:r.id, productId:r.product_id, date:r.date, qty:N
 
 async function fetchAll(){
   if(isAdminOnly()){
-    const [{data:products}, {data:buyers}, {data:notas}] = await Promise.all([
+    const [{data:products}, {data:buyers}, {data:notas}, {data:totals}] = await Promise.all([
       sb.from('products').select('*').order('name'),
       sb.from('buyers').select('*'),
       sb.rpc('list_notas'),
+      sb.rpc('stock_totals'),
     ]);
+    stockTotalsAdmin = totals || null;
     state.products = (products||[]).map(rowToProduct);
     buyersExtra = buyers || [];
     state.transactions = (notas||[]).map(r=>{ const t = rowToTransaction(r); t._pays = (r.pays||[]).map(p=>({ date:p.date, amount:Number(p.amount), payment:p.payment })); return t; }); state.cashflow = []; state.stockIn = [];
