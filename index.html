@@ -228,7 +228,7 @@ const statusPill = key => key==='lunas'
   : '<span class="pill" style="background:var(--danger);color:var(--danger-ink);">Belum bayar</span>';
 let state = { products: [], transactions: [], cashflow: [], stockIn: [], tab: 'dashboard', ready:false, role:'admin', kasMonth: nowMonth(), riwayatMonth: nowMonth() };
 
-function allowedTabs(){ return isAdminOnly() ? ['produk','kasir'] : ['dashboard','produk','kasir','kas','riwayat']; }
+function allowedTabs(){ return isAdminOnly() ? ['produk','kasir','riwayat'] : ['dashboard','produk','kasir','kas','riwayat']; }
 function render(){
   if(!allowedTabs().includes(state.tab)) state.tab = isAdminOnly() ? 'produk' : 'dashboard';
   document.querySelectorAll('.tab-btn[data-tab]').forEach(b=>{ b.style.display = allowedTabs().includes(b.dataset.tab) ? '' : 'none'; });
@@ -296,12 +296,34 @@ function renderProdukAdmin(){
         <div style="font-weight:700;font-size:14px;">${esc(p.name)}</div>
         <div style="font-size:12px;color:var(--sub);">${p.category==='fillet'?'Fillet':'Utuh'}</div>
       </div>
-      <div style="text-align:right;"><div style="font-weight:800;font-size:18px;">${p.stock}</div><div style="font-size:11px;color:var(--sub);">${esc(p.unit||'pcs')} tersedia</div></div>
+      <div style="text-align:right;"><div style="font-weight:800;font-size:18px;">${p.stock}</div><div style="font-size:11px;color:var(--sub);">${esc(p.unit||'pcs')} tersedia</div>
+        <button data-riwayat-admin="${p.id}" style="font-size:11px;color:var(--brand);background:none;border:none;font-weight:600;margin-top:2px;">Riwayat &rsaquo;</button></div>
     </div>`).join('') || `<div style="color:var(--sub);font-size:13px;">Belum ada produk.</div>`;
   return `
     <h1 style="font-size:18px;font-weight:800;margin:0 0 2px;">Stok Produk</h1>
     <p style="font-size:12px;color:var(--sub);margin:0 0 14px;">Stok yang tersedia saat ini</p>
     ${rows}`;
+}
+async function openProductHistoryAdmin(p){
+  const { data, error } = await sb.rpc('product_history', { p_product_id: p.id });
+  if(error || !data){ alert('Riwayat belum bisa dibuka. Minta owner menjalankan SQL migration_riwayat_admin.sql di Supabase.'); return; }
+  const all = [...(data.in||[]).map(r=>({...r,kind:'in'})), ...(data.out||[]).map(r=>({...r,kind:'out'}))].sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const totalIn = (data.in||[]).reduce((s,r)=>s+Number(r.qty),0);
+  const rows = all.map(r=> r.kind==='in'
+    ? `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);"><div><div style="font-size:13px;font-weight:600;">${fmtDate(r.date)}</div>${r.note?`<div style="font-size:11px;color:var(--sub);">${esc(r.note)}</div>`:''}</div><div style="font-weight:800;color:var(--accent-ink);">+${r.qty} ${esc(p.unit||'')}</div></div>`
+    : `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);"><div><div style="font-size:13px;font-weight:600;">${fmtDate(r.date)}</div><div style="font-size:11px;color:var(--sub);">Terjual ke ${esc(r.buyer)}</div></div><div style="font-weight:800;color:var(--danger-ink);">-${r.qty} ${esc(p.unit||'')}</div></div>`
+  ).join('') || `<div style="color:var(--sub);font-size:13px;padding:10px 0;">Belum ada riwayat untuk produk ini.</div>`;
+  document.getElementById('modal-root').innerHTML = `
+  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:flex-end;justify-content:center;">
+    <div style="background:var(--bg);width:100%;max-width:520px;max-height:85vh;overflow-y:auto;border-radius:16px 16px 0 0;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;"><div style="font-weight:800;">${esc(p.name)}</div><button id="close-hist-a" style="background:none;border:none;font-size:20px;color:var(--sub);">&times;</button></div>
+      <div style="font-size:12px;color:var(--sub);margin-bottom:12px;">Stok saat ini: <b>${p.stock} ${esc(p.unit||'')}</b> &middot; Total pernah masuk: <b>${totalIn} ${esc(p.unit||'')}</b></div>
+      ${rows}
+      <button id="close-hist-a2" class="btn-secondary" style="width:100%;margin-top:14px;">Tutup</button>
+    </div>
+  </div>`;
+  const c = ()=>{ document.getElementById('modal-root').innerHTML=''; };
+  document.getElementById('close-hist-a').onclick = c; document.getElementById('close-hist-a2').onclick = c;
 }
 function renderProduk(){
   if(isAdminOnly()) return renderProdukAdmin();
@@ -542,7 +564,12 @@ function renderKas(){
         <div style="font-weight:700;font-size:13px;">${esc(kasCategoryOf(c))}${c.desc?` &middot; ${esc(c.desc)}`:''}</div>
         <div style="font-size:11px;color:var(--sub);">${new Date(c.date).toLocaleDateString('id-ID',{day:'numeric',month:'short'})} &middot; <span class="pill" style="background:var(--accent);color:var(--accent-ink);">${c.payment==='cash'?'Cash':'Transfer'}</span></div>
       </div>
-      <div style="font-weight:800;color:${c.type==='in'?'var(--accent-ink)':'var(--danger-ink)'};">${c.type==='in'?'+':'-'}${fmtRp(c.amount)}</div>
+      <div style="text-align:right;">
+        <div style="font-weight:800;color:${c.type==='in'?'var(--accent-ink)':'var(--danger-ink)'};">${c.type==='in'?'+':'-'}${fmtRp(c.amount)}</div>
+        ${state.role!=='owner' ? '' : (c.source==='transaction'
+          ? `<div style="font-size:10px;color:var(--sub);margin-top:2px;">dari nota &middot; ubah lewat Riwayat &rsaquo; Edit Nota</div>`
+          : `<div style="margin-top:3px;">${c.category==='Setor Tunai ke Rekening' ? '' : `<button data-edit-kas="${c.id}" style="font-size:11px;color:var(--brand);background:none;border:none;font-weight:600;margin-right:8px;">Edit</button>`}<button data-del-kas="${c.id}" style="font-size:11px;color:var(--danger-ink);background:none;border:none;font-weight:600;">Hapus</button></div>`)}
+      </div>
     </div>`).join('') || `<div style="color:var(--sub);font-size:13px;">Belum ada catatan kas bulan ini.</div>`;
   return `
     <h1 style="font-size:18px;font-weight:800;margin:0 0 2px;">Kas</h1>
@@ -633,7 +660,7 @@ function renderRiwayat(){
   }).join('') || `<div style="color:var(--sub);font-size:13px;">Belum ada riwayat bulan ini.</div>`;
   return `
     <h1 style="font-size:18px;font-weight:800;margin:0 0 2px;">Riwayat</h1>
-    <p style="font-size:12px;color:var(--sub);margin:0 0 14px;">Transaksi &amp; kas per bulan</p>
+    <p style="font-size:12px;color:var(--sub);margin:0 0 14px;">${isAdminOnly()?'Nota penjualan per bulan':'Transaksi &amp; kas per bulan'}</p>
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
       <button id="riwayat-prev" class="btn-secondary" style="padding:6px 12px;">&lsaquo;</button>
       <div style="flex:1;text-align:center;font-weight:700;font-size:14px;">${monthLabel(state.riwayatMonth)}</div>
@@ -1170,6 +1197,9 @@ function attachHandlers(){
     clearFormDraft('stockin');
     fsi.reset();
   };
+  document.querySelectorAll('[data-riwayat-admin]').forEach(b=>{
+    b.onclick = ()=>{ const p = state.products.find(p=>p.id===b.dataset.riwayatAdmin); if(p) openProductHistoryAdmin(p); };
+  });
   document.querySelectorAll('[data-riwayat-produk]').forEach(b=>{
     b.onclick = ()=>{
       const p = state.products.find(p=>p.id===b.dataset.riwayatProduk);
@@ -1284,6 +1314,12 @@ function attachHandlers(){
   const kasTypeEl = document.getElementById('kas-type');
   const kasCatEl = document.getElementById('kas-category');
   if(kasTypeEl && kasCatEl) kasTypeEl.onchange = ()=>{ kasCatEl.innerHTML = kasCategoryOptions(kasTypeEl.value); };
+  document.querySelectorAll('[data-del-kas]').forEach(b=>{
+    b.onclick = ()=>{ const c = state.cashflow.find(x=>x.id===b.dataset.delKas); if(c) deleteCashEntry(c); };
+  });
+  document.querySelectorAll('[data-edit-kas]').forEach(b=>{
+    b.onclick = ()=>{ const c = state.cashflow.find(x=>x.id===b.dataset.editKas); if(c) openEditKas(c); };
+  });
   if(fkas) fkas.onsubmit = async e=>{
     e.preventDefault();
     const f = new FormData(fkas);
@@ -1341,13 +1377,14 @@ const rowToStockIn = r => ({ id:r.id, productId:r.product_id, date:r.date, qty:N
 
 async function fetchAll(){
   if(isAdminOnly()){
-    const [{data:products}, {data:buyers}] = await Promise.all([
+    const [{data:products}, {data:buyers}, {data:notas}] = await Promise.all([
       sb.from('products').select('*').order('name'),
       sb.from('buyers').select('*'),
+      sb.rpc('list_notas'),
     ]);
     state.products = (products||[]).map(rowToProduct);
     buyersExtra = buyers || [];
-    state.transactions = []; state.cashflow = []; state.stockIn = [];
+    state.transactions = (notas||[]).map(r=>{ const t = rowToTransaction(r); t._pays = (r.pays||[]).map(p=>({ date:p.date, amount:Number(p.amount), payment:p.payment })); return t; }); state.cashflow = []; state.stockIn = [];
     state.ready = true;
     render();
     return;
@@ -1544,6 +1581,54 @@ async function transferCashToBank(amount, dateStr){
   if(e1 || e2){ alert('Gagal mencatat setoran: '+(e1?.message||e2?.message)); return; }
   state.kasMonth = monthKey(date);
   await fetchAll();
+}
+async function deleteCashEntry(c){
+  const isSetor = c.category==='Setor Tunai ke Rekening';
+  const msg = isSetor ? 'Hapus setoran tunai ini? Pasangannya (cash keluar & transfer masuk) ikut terhapus.' : `Hapus catatan kas "${kasCategoryOf(c)}${c.desc?' · '+c.desc:''}" senilai ${fmtRp(c.amount)}?`;
+  if(!confirm(msg)) return;
+  const ids = [c.id];
+  if(isSetor){
+    const pair = state.cashflow.find(x=>x.id!==c.id && x.category==='Setor Tunai ke Rekening' && x.amount===c.amount && x.type!==c.type && toDateInput(x.date)===toDateInput(c.date));
+    if(pair) ids.push(pair.id);
+  }
+  const { data: del, error } = await sb.from('cashflow').delete().in('id', ids).eq('source','manual').select();
+  if(error || !del || del.length===0){ alert('Gagal menghapus. Hanya owner yang boleh menghapus catatan kas.'); return; }
+  await fetchAll();
+}
+async function updateCashEntry(c, d){
+  const { data: upd, error } = await sb.from('cashflow').update({ date: dateFromInput(d.date, c.date), category: d.category, description: d.desc, amount: d.amount, payment: d.payment }).eq('id', c.id).eq('source','manual').select();
+  if(error || !upd || upd.length===0){ alert('Gagal menyimpan perubahan kas.'); return false; }
+  state.kasMonth = monthKey(upd[0].date);
+  await fetchAll();
+  return true;
+}
+function openEditKas(c){
+  const cats = (KAS_CATEGORIES[c.type]||[]).slice(); if(c.category && !cats.includes(c.category)) cats.unshift(c.category);
+  document.getElementById('modal-root').innerHTML = `
+  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end;justify-content:center;">
+    <div style="background:var(--bg);width:100%;max-width:420px;border-radius:16px 16px 0 0;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <div style="font-weight:800;">Edit Catatan Kas (${c.type==='in'?'Masuk':'Keluar'})</div>
+        <button id="close-ek" style="background:none;border:none;font-size:20px;color:var(--sub);">&times;</button>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <input id="ek-date" type="date" value="${toDateInput(c.date)}" max="${todayInput()}">
+        <select id="ek-cat">${cats.map(x=>`<option value="${esc(x)}" ${x===c.category?'selected':''}>${esc(x)}</option>`).join('')}</select>
+        <input id="ek-desc" value="${esc(c.desc||'')}" placeholder="Keterangan">
+        <input id="ek-amount" type="text" inputmode="numeric" data-rp value="${rpFormat(c.amount)}" placeholder="Jumlah (Rp)">
+        <select id="ek-pay"><option value="cash" ${c.payment==='cash'?'selected':''}>Cash</option><option value="transfer" ${c.payment==='transfer'?'selected':''}>Transfer</option></select>
+        <button id="ek-save" class="btn-primary">Simpan</button>
+      </div>
+    </div>
+  </div>`;
+  bindAllRp(document.getElementById('modal-root'));
+  document.getElementById('close-ek').onclick = ()=>{ document.getElementById('modal-root').innerHTML=''; };
+  document.getElementById('ek-save').onclick = async ()=>{
+    const amount = rpVal('ek-amount');
+    if(!amount){ alert('Jumlah harus diisi.'); return; }
+    const ok = await updateCashEntry(c, { date: document.getElementById('ek-date').value, category: document.getElementById('ek-cat').value, desc: document.getElementById('ek-desc').value.trim(), amount, payment: document.getElementById('ek-pay').value });
+    if(ok) document.getElementById('modal-root').innerHTML='';
+  };
 }
 async function saveCashflow(entry){
   const { error } = await sb.from('cashflow').insert({ date: entry.date, type: entry.type, category: entry.category, description: entry.desc, amount: entry.amount, payment: entry.payment, source:'manual' });
