@@ -212,6 +212,9 @@ function buyerDirectory(){
   buyersExtra.forEach(b=>{ const k=(b.name||'').trim().toLowerCase(); if(k && !byName[k]) byName[k] = { name:b.name.trim(), phone:b.phone||'' }; });
   return Object.values(byName);
 }
+// Stok yang dikurangi per item nota: normalnya produk & qty yang sama;
+// kalau item punya stockProductId, stok diambil dari produk lain sebanyak stockQty.
+function itemStock(it){ return it.stockProductId ? { pid: it.stockProductId, qty: Number(it.stockQty)||0 } : { pid: it.productId, qty: Number(it.qty)||0 }; }
 function isAdminOnly(){ return state.role!=='owner'; }
 function txPaymentsOf(tx){ return tx._pays || txPayments(tx.id); }
 let buyersExtra = [];
@@ -313,7 +316,7 @@ async function openProductHistoryAdmin(p){
   const totalIn = (data.in||[]).reduce((s,r)=>s+Number(r.qty),0);
   const rows = all.map(r=> r.kind==='in'
     ? `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);"><div><div style="font-size:13px;font-weight:600;">${fmtDate(r.date)}</div>${r.note?`<div style="font-size:11px;color:var(--sub);">${esc(r.note)}</div>`:''}</div><div style="font-weight:800;color:var(--accent-ink);">+${r.qty} ${esc(p.unit||'')}</div></div>`
-    : `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);"><div><div style="font-size:13px;font-weight:600;">${fmtDate(r.date)}</div><div style="font-size:11px;color:var(--sub);">Terjual ke ${esc(r.buyer)}</div></div><div style="font-weight:800;color:var(--danger-ink);">-${r.qty} ${esc(p.unit||'')}</div></div>`
+    : `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);"><div><div style="font-size:13px;font-weight:600;">${fmtDate(r.date)}</div><div style="font-size:11px;color:var(--sub);">Terjual ke ${esc(r.buyer)}${r.via?` (di nota tertulis ${esc(r.via)})`:''}</div></div><div style="font-weight:800;color:var(--danger-ink);">-${r.qty} ${esc(p.unit||'')}</div></div>`
   ).join('') || `<div style="color:var(--sub);font-size:13px;padding:10px 0;">Belum ada riwayat untuk produk ini.</div>`;
   document.getElementById('modal-root').innerHTML = `
   <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:flex-end;justify-content:center;">
@@ -390,8 +393,8 @@ function openProductHistory(p){
   const inRows = state.stockIn.filter(s=>s.productId===p.id).map(s=>({ id:s.id, date:s.date, kind:'in', qty:s.qty, note:s.note, price:s.price }));
   const outRows = [];
   state.transactions.forEach(tx=>{
-    tx.items.filter(it=>it.productId===p.id).forEach(it=>{
-      outRows.push({ date:tx.date, kind:'out', qty:it.qty, buyer:tx.buyerName });
+    tx.items.filter(it=>itemStock(it).pid===p.id).forEach(it=>{
+      outRows.push({ date:tx.date, kind:'out', qty:itemStock(it).qty, buyer:tx.buyerName, via: it.stockProductId ? it.name : '' });
     });
   });
   const all = [...inRows, ...outRows].sort((a,b)=>new Date(b.date)-new Date(a.date));
@@ -407,7 +410,7 @@ function openProductHistory(p){
       </div>`;
     }
     return `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);">
-      <div><div style="font-size:13px;font-weight:600;">${fmtDate(r.date)}</div><div style="font-size:11px;color:var(--sub);">Terjual ke ${esc(r.buyer)}</div></div>
+      <div><div style="font-size:13px;font-weight:600;">${fmtDate(r.date)}</div><div style="font-size:11px;color:var(--sub);">Terjual ke ${esc(r.buyer)}${r.via?` (di nota tertulis ${esc(r.via)})`:''}</div></div>
       <div style="font-weight:800;color:var(--danger-ink);">-${r.qty} ${esc(p.unit||'')}</div>
     </div>`;
   }).join('') || `<div style="color:var(--sub);font-size:13px;padding:10px 0;">Belum ada riwayat untuk produk ini.</div>`;
@@ -491,7 +494,7 @@ function renderKasir(){
   const options = state.products.map(p=>`<option value="${p.id}">${esc(p.name)} (stok ${p.stock} ${esc(p.unit||'')})</option>`).join('');
   const cartRows = kasirCart.map((it,i)=>`
     <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px;">
-      <div>${esc(it.name)}<br><span style="color:var(--sub);font-size:11px;">${it.qty} x ${fmtRp(it.price)}</span></div>
+      <div>${esc(it.name)}<br><span style="color:var(--sub);font-size:11px;">${it.qty} x ${fmtRp(it.price)}</span>${it.stockProductId ? `<br><span style="color:var(--brand);font-size:11px;">Stok dikurangi dari ${esc(it.stockName||'produk lain')}: ${it.stockQty}</span>` : ''}</div>
       <div style="display:flex;align-items:center;gap:8px;">
         <b>${fmtRp(it.qty*it.price)}</b>
         <button data-rm-cart="${i}" style="color:var(--danger-ink);background:none;border:none;font-size:16px;">&times;</button>
@@ -508,6 +511,11 @@ function renderKasir(){
         <div style="display:flex;gap:8px;">
           <input id="cart-qty" type="number" placeholder="Qty" value="1" min="1" style="flex:1;">
           <input id="cart-price" type="text" inputmode="numeric" data-rp placeholder="Harga satuan (Rp)" style="flex:1;">
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--sub);"><input type="checkbox" id="cart-src-toggle" style="width:auto;"> Stok diambil dari produk lain (nota tetap tertulis produk di atas)</label>
+        <div id="cart-src-box" style="display:none;flex-direction:column;gap:8px;">
+          <select id="cart-src-product">${options}</select>
+          <input id="cart-src-qty" type="number" step="any" min="0" placeholder="Jumlah stok yang dikurangi (mis. 66)">
         </div>
         <button id="btn-add-cart" class="btn-secondary">+ Tambah ke keranjang</button>
       </div>
@@ -898,6 +906,7 @@ function renderEditNota(){
         <input type="number" min="0" step="any" data-edit-qty="${i}" value="${it.qty}" placeholder="Qty" style="flex:1;">
         <input type="text" inputmode="numeric" data-rp data-edit-price="${i}" value="${rpFormat(it.price)}" placeholder="Harga satuan" style="flex:1;">
       </div>
+      ${it.stockProductId ? `<div style="display:flex;align-items:center;gap:8px;margin-top:4px;font-size:11px;color:var(--brand);"><span style="flex:1;">Stok dikurangi dari ${esc(it.stockName||'produk lain')}:</span><input type="number" min="0" step="any" data-edit-sq="${i}" value="${it.stockQty}" style="flex:1;"></div>` : ''}
     </div>`).join('') || `<div style="color:var(--sub);font-size:13px;padding:8px 0;">Belum ada item.</div>`;
   const options = state.products.map(p=>`<option value="${p.id}">${esc(p.name)} (stok ${p.stock} ${esc(p.unit||'')})</option>`).join('');
   document.getElementById('modal-root').innerHTML = `
@@ -966,6 +975,9 @@ function renderEditNota(){
   document.querySelectorAll('[data-edit-qty]').forEach(inp=>{
     inp.oninput = ()=>{ d.items[Number(inp.dataset.editQty)].qty = Number(inp.value||0); refreshEditTotals(); };
   });
+  document.querySelectorAll('[data-edit-sq]').forEach(inp=>{
+    inp.oninput = ()=>{ d.items[Number(inp.dataset.editSq)].stockQty = Number(inp.value||0); };
+  });
   document.querySelectorAll('[data-edit-price]').forEach(inp=>{
     inp.oninput = ()=>{ d.items[Number(inp.dataset.editPrice)].price = rpParse(inp.value); refreshEditTotals(); };
   });
@@ -1005,7 +1017,7 @@ function renderEditNota(){
     const price = rpVal('edit-new-price');
     if(!p || qty<=0){ alert('Pilih produk dan isi qty.'); return; }
     if(price<=0){ alert('Isi harga satuan dulu.'); return; }
-    const existing = d.items.find(it=>it.productId===p.id && it.price===price);
+    const existing = d.items.find(it=>it.productId===p.id && it.price===price && !it.stockProductId);
     if(existing) existing.qty += qty; else d.items.push({ productId:p.id, name:p.name, qty, price });
     renderEditNota();
   };
@@ -1218,10 +1230,20 @@ function attachHandlers(){
     const p = state.products.find(p=>p.id===sel.value);
     if(!p || qty<=0){ return; }
     if(!price || price<=0){ priceInput.focus(); alert('Isi harga satuan dulu.'); return; }
-    kasirCart.push({productId:p.id, name:p.name, qty, price});
+    const item = {productId:p.id, name:p.name, qty, price};
+    const srcOn = document.getElementById('cart-src-toggle');
+    if(srcOn && srcOn.checked){
+      const sp = state.products.find(x=>x.id===document.getElementById('cart-src-product').value);
+      const sq = Number(document.getElementById('cart-src-qty').value||0);
+      if(!sp || sq<=0){ alert('Isi produk sumber stok dan jumlahnya.'); return; }
+      item.stockProductId = sp.id; item.stockName = sp.name; item.stockQty = sq;
+    }
+    kasirCart.push(item);
     saveKasirDraft();
     render();
   };
+  const srcT = document.getElementById('cart-src-toggle');
+  if(srcT) srcT.onchange = ()=>{ document.getElementById('cart-src-box').style.display = srcT.checked ? 'flex' : 'none'; };
   document.querySelectorAll('[data-rm-cart]').forEach(b=>{
     b.onclick = ()=>{ kasirCart.splice(Number(b.dataset.rmCart),1); saveKasirDraft(); render(); };
   });
@@ -1514,7 +1536,8 @@ async function saveTransaction(tx){
   if(error){ alert('Gagal menyimpan transaksi: '+error.message); return null; }
   let stockFail = false;
   for(const it of tx.items){
-    const ok = await adjustStock(it.productId, -it.qty);
+    const ss = itemStock(it);
+    const ok = await adjustStock(ss.pid, -ss.qty);
     if(!ok) stockFail = true;
   }
   if(stockFail) alert('Nota tersimpan, tapi stok sebagian produk gagal dikurangi (kemungkinan izin database). Cek stok manual lewat Stock Opname.');
@@ -1538,8 +1561,8 @@ async function updateTransaction(oldTx, d){
   }
   // sesuaikan stok: kembalikan qty lama, kurangi qty baru
   const diffByProduct = {};
-  oldTx.items.forEach(it=>{ diffByProduct[it.productId] = (diffByProduct[it.productId]||0) + it.qty; });
-  d.items.forEach(it=>{ diffByProduct[it.productId] = (diffByProduct[it.productId]||0) - it.qty; });
+  oldTx.items.forEach(it=>{ const ss = itemStock(it); diffByProduct[ss.pid] = (diffByProduct[ss.pid]||0) + ss.qty; });
+  d.items.forEach(it=>{ const ss = itemStock(it); diffByProduct[ss.pid] = (diffByProduct[ss.pid]||0) - ss.qty; });
   for(const [pid, diff] of Object.entries(diffByProduct)){
     if(!diff) continue;
     await adjustStock(pid, diff);
@@ -1567,7 +1590,8 @@ async function cancelTransaction(tx){
   if(!confirm(`Batalkan nota ${tx.buyerName} senilai ${fmtRp(tx.total)}? Stok akan dikembalikan dan nota ini dihapus permanen.`)) return;
   const { data: cf } = await sb.from('cashflow').delete().eq('ref', tx.id).eq('source','transaction').select();
   for(const it of tx.items){
-    await adjustStock(it.productId, it.qty);
+    const ss = itemStock(it);
+    await adjustStock(ss.pid, ss.qty);
   }
   const { data: delTx, error } = await sb.from('transactions').delete().eq('id', tx.id).select();
   if(error || !delTx || delTx.length===0){
