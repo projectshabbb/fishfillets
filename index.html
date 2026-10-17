@@ -203,6 +203,7 @@ const dateFromInput = (str, keepIso) => {
   return new Date(y, m-1, d, 12, 0, 0).toISOString();
 };
 
+function marketerNames(){ return [...new Set(state.transactions.map(t=>(t.marketer||'').trim()).filter(Boolean))].sort(); }
 function buyerDirectory(){
   const byName = {};
   state.transactions.slice().sort((a,b)=>new Date(a.date)-new Date(b.date)).forEach(t=>{
@@ -219,6 +220,20 @@ function isAdminOnly(){ return state.role!=='owner'; }
 function txPaymentsOf(tx){ return tx._pays || txPayments(tx.id); }
 let buyersExtra = [];
 let stockTotalsAdmin = null;
+let officePrices = {};      // harga kantor terkini per produk (khusus owner)
+let officeHistory = [];
+let officeReady = false;   // true jika SQL migration_harga_kantor.sql sudah dijalankan     // riwayat perubahan harga kantor (khusus owner)
+function txMargin(tx){      // bagian marketer = (harga nota - harga kantor) x qty
+  const op = tx.officePrices || {};
+  let total = 0, missing = 0; const rows = [];
+  tx.items.forEach(it=>{
+    const o = op[it.productId];
+    if(o==null){ missing++; rows.push({ name:it.name, qty:it.qty, price:it.price, office:null, share:null }); return; }
+    const share = (it.price - Number(o)) * it.qty; total += share;
+    rows.push({ name:it.name, qty:it.qty, price:it.price, office:Number(o), share });
+  });
+  return { total, missing, rows };
+}
 function txPayments(txId){ return state.cashflow.filter(c=>c.ref===txId && c.source==='transaction' && c.type==='in').sort((a,b)=>new Date(a.date)-new Date(b.date)); }
 function txStatus(tx){
   const paid = txPaymentsOf(tx).reduce((s,c)=>s+c.amount,0);
@@ -309,6 +324,42 @@ function renderProdukAdmin(){
     <p style="font-size:12px;color:var(--sub);margin:0 0 14px;">Stok yang tersedia saat ini</p>
     ${rows}`;
 }
+function openOfficePrice(p){
+  const hist = officeHistory.filter(r=>r.product_id===p.id);
+  const histHtml = hist.slice(0,6).map(r=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;"><span style="color:var(--sub);">Berlaku ${fmtDate(r.effective_date+'T00:00:00')}</span><b>${fmtRp(Number(r.price))}</b></div>`).join('') || `<div style="font-size:12px;color:var(--sub);">Belum ada harga kantor.</div>`;
+  document.getElementById('modal-root').innerHTML = `
+  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end;justify-content:center;">
+    <div style="background:var(--bg);width:100%;max-width:420px;border-radius:16px 16px 0 0;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><div style="font-weight:800;">Harga kantor &mdash; ${esc(p.name)}</div><button id="close-op" style="background:none;border:none;font-size:20px;color:var(--sub);">&times;</button></div>
+      <div style="font-size:12px;color:var(--sub);margin-bottom:10px;">Harga jual dari kantor (per ${esc(p.unit||'kg')}). Selisih dengan harga di nota = bagian marketer. Nota lama tidak berubah.</div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <input id="op-price" type="text" inputmode="numeric" data-rp value="${officePrices[p.id]!=null?rpFormat(officePrices[p.id]):''}" placeholder="Harga kantor (Rp)">
+        <div style="font-size:11px;color:var(--sub);">Mulai berlaku tanggal</div>
+        <input id="op-date" type="date" value="${todayInput()}">
+        <label style="display:flex;gap:8px;font-size:12px;color:var(--sub);align-items:flex-start;"><input type="checkbox" id="op-backfill" style="width:auto;margin-top:2px;"> Isi juga untuk nota lama produk ini yang belum punya harga kantor (memakai harga ini)</label>
+        <button id="op-save" class="btn-primary">Simpan</button>
+      </div>
+      <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:8px;">${histHtml}</div>
+    </div>
+  </div>`;
+  bindAllRp(document.getElementById('modal-root'));
+  document.getElementById('close-op').onclick = ()=>{ document.getElementById('modal-root').innerHTML=''; };
+  document.getElementById('op-save').onclick = async ()=>{
+    const price = rpVal('op-price'); const date = document.getElementById('op-date').value || todayInput();
+    if(!(price>0)){ alert('Isi harga kantor.'); return; }
+    const { error } = await sb.from('product_office_prices').insert({ product_id: p.id, price, effective_date: date });
+    if(error){ alert('Gagal menyimpan. Pastikan SQL migration_harga_kantor.sql sudah dijalankan.\n\n'+error.message); return; }
+    if(document.getElementById('op-backfill').checked){
+      for(const t of state.transactions){
+        if(!t.items.some(it=>it.productId===p.id)) continue;
+        if(t.officePrices && t.officePrices[p.id]!=null) continue;
+        await sb.from('transactions').update({ office_prices: { ...(t.officePrices||{}), [p.id]: price } }).eq('id', t.id);
+      }
+    }
+    document.getElementById('modal-root').innerHTML='';
+    await fetchAll();
+  };
+}
 async function openProductHistoryAdmin(p){
   const { data, error } = await sb.rpc('product_history', { p_product_id: p.id });
   if(error || !data){ alert('Riwayat belum bisa dibuka. Minta owner menjalankan SQL migration_riwayat_admin.sql di Supabase.' + (error ? '\n\nDetail: '+(error.message||error.code) : '')); return; }
@@ -345,6 +396,10 @@ function renderProduk(){
         </div>
       </div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding-top:8px;border-top:1px solid var(--line);">
+        <div style="font-size:11px;color:var(--sub);">Harga kantor: <b style="color:var(--ink);">${officePrices[p.id]!=null ? fmtRp(officePrices[p.id]) : 'belum diisi'}</b></div>
+        <button data-office-price="${p.id}" style="font-size:11px;color:var(--brand);background:none;border:none;font-weight:600;">${officePrices[p.id]!=null ? 'Ubah' : 'Isi'} &rsaquo;</button>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;">
         <div style="font-size:11px;color:var(--sub);">Total pernah masuk: <b style="color:var(--ink);">${totalStockIn(p.id)} ${esc(p.unit||'')}</b></div>
         <button data-riwayat-produk="${p.id}" style="font-size:11px;color:var(--brand);background:none;border:none;font-weight:600;">Riwayat &rsaquo;</button>
       </div>
@@ -474,7 +529,7 @@ function openProductHistory(p){
 // ---------- KASIR (Transaksi/Nota) ----------
 let kasirCart = [];
 let kasirPaidTouched = false;
-let kasirDraft = { buyerName:'', buyerPhone:'', discount:0, shipping:0, paid:'', status:'lunas', date:'' };
+let kasirDraft = { marketer:'', buyerName:'', buyerPhone:'', discount:0, shipping:0, paid:'', status:'lunas', date:'' };
 function loadKasirDraft(){
   try{
     const raw = localStorage.getItem('ff_kasir_draft');
@@ -487,14 +542,14 @@ function saveKasirDraft(){
 function clearKasirDraft(){
   try{ localStorage.removeItem('ff_kasir_draft'); }catch(e){}
   kasirCart = [];
-  kasirDraft = { buyerName:'', buyerPhone:'', discount:0, shipping:0, paid:'', status:'lunas', date:'' };
+  kasirDraft = { marketer:'', buyerName:'', buyerPhone:'', discount:0, shipping:0, paid:'', status:'lunas', date:'' };
 }
 loadKasirDraft();
 function renderKasir(){
   const options = state.products.map(p=>`<option value="${p.id}">${esc(p.name)} (stok ${p.stock} ${esc(p.unit||'')})</option>`).join('');
   const cartRows = kasirCart.map((it,i)=>`
     <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px;">
-      <div>${esc(it.name)}<br><span style="color:var(--sub);font-size:11px;">${it.qty} x ${fmtRp(it.price)}</span>${it.stockProductId ? `<br><span style="color:var(--brand);font-size:11px;">Stok dikurangi dari ${esc(it.stockName||'produk lain')}: ${it.stockQty}</span>` : ''}</div>
+      <div>${esc(it.name)}<br><span style="color:var(--sub);font-size:11px;">${it.qty} x ${fmtRp(it.price)}</span>${(it.gramasi||it.pcs) ? `<br><span style="color:var(--sub);font-size:11px;">Gramasi: ${it.gramasi?it.gramasi+' gr':'-'} &middot; ${it.pcs?it.pcs+' pcs':'-'}</span>` : ''}${it.stockProductId ? `<br><span style="color:var(--brand);font-size:11px;">Stok dikurangi dari ${esc(it.stockName||'produk lain')}: ${it.stockQty}</span>` : ''}</div>
       <div style="display:flex;align-items:center;gap:8px;">
         <b>${fmtRp(it.qty*it.price)}</b>
         <button data-rm-cart="${i}" style="color:var(--danger-ink);background:none;border:none;font-size:16px;">&times;</button>
@@ -511,6 +566,11 @@ function renderKasir(){
         <div style="display:flex;gap:8px;">
           <input id="cart-qty" type="number" placeholder="Qty" value="1" min="1" style="flex:1;">
           <input id="cart-price" type="text" inputmode="numeric" data-rp placeholder="Harga satuan (Rp)" style="flex:1;">
+        </div>
+        <div style="font-size:11px;color:var(--sub);margin-top:2px;">Khusus pesanan potong gramasi (boleh dikosongkan) &mdash; muncul di Surat Jalan</div>
+        <div style="display:flex;gap:8px;">
+          <input id="cart-gram" type="number" step="any" min="0" placeholder="Gramasi (gr/pcs)" style="flex:1;">
+          <input id="cart-pcs" type="number" step="1" min="0" placeholder="Jumlah pcs" style="flex:1;">
         </div>
         <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--sub);"><input type="checkbox" id="cart-src-toggle" style="width:auto;"> Stok diambil dari produk lain (nota tetap tertulis produk di atas)</label>
         <div id="cart-src-box" style="display:none;flex-direction:column;gap:8px;">
@@ -534,6 +594,9 @@ function renderKasir(){
       <div style="display:flex;justify-content:space-between;font-weight:800;font-size:15px;padding:6px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);">
         <span>Total</span><span id="kasir-total-preview">${fmtRp(subtotal)}</span>
       </div>
+      <div style="font-size:13px;font-weight:700;margin-top:4px;">Marketer (opsional)</div>
+      <input id="kasir-marketer" name="marketer" list="marketer-list" placeholder="Nama marketer yang menjual (kosongkan jika langsung dari kantor)" value="${esc(kasirDraft.marketer||'')}" autocomplete="off">
+      <datalist id="marketer-list">${marketerNames().map(n=>`<option value="${esc(n)}"></option>`).join('')}</datalist>
       <div style="font-size:13px;font-weight:700;margin-top:4px;">Data pembeli</div>
       <div style="position:relative;">
         <input id="kasir-buyer-name" name="buyerName" placeholder="Nama pembeli" value="${esc(kasirDraft.buyerName)}" autocomplete="off" required>
@@ -637,6 +700,20 @@ function renderKas(){
 }
 
 // ---------- RIWAYAT (per bulan) ----------
+function marketerSummaryHtml(){
+  if(isAdminOnly()) return '';
+  const txs = state.transactions.filter(t=>monthKey(t.date)===state.riwayatMonth && t.officePrices);
+  if(!txs.length) return '';
+  const by = {}; let total = 0, missing = 0;
+  txs.forEach(t=>{ const m = txMargin(t); const k = (t.marketer||'').trim() || '(tanpa marketer / langsung kantor)'; by[k] = (by[k]||0) + m.total; total += m.total; missing += m.missing; });
+  const lines = Object.entries(by).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;"><span>${esc(k)}</span><b>${fmtRp(v)}</b></div>`).join('');
+  return `<div class="card" style="padding:12px;margin-bottom:12px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;"><div style="font-size:12px;font-weight:700;">Bagian marketer bulan ini</div><div style="font-weight:800;">${fmtRp(total)}</div></div>
+    <div style="margin-top:6px;">${lines}</div>
+    ${missing ? `<div style="font-size:10px;color:var(--sub);margin-top:4px;">* ${missing} item belum punya harga kantor (tidak dihitung).</div>` : ''}
+    <div style="font-size:10px;color:var(--sub);margin-top:4px;">Bisa dicocokkan dengan catatan &ldquo;Fee Marketer&rdquo; di tab Kas.</div>
+  </div>`;
+}
 function renderRiwayat(){
   const items = [
     ...state.transactions.map(t=>({...t, kind:'sale'})),
@@ -656,6 +733,7 @@ function renderRiwayat(){
         <div style="text-align:right;">
           <div style="font-weight:800;">${fmtRp(it.total)}</div>
           ${st.rest>0 ? `<div style="font-size:11px;color:var(--brand2);font-weight:600;">Sisa ${fmtRp(st.rest)}</div>` : `<div style="font-size:11px;color:var(--brand);">Lihat nota &rsaquo;</div>`}
+          ${(!isAdminOnly() && it.officePrices) ? `<div style="font-size:10px;color:var(--sub);">Marketer ${fmtRp(txMargin(it).total)}${it.marketer?' &middot; '+esc(it.marketer):''}</div>` : ''}
         </div>
       </div>`;
     }
@@ -676,6 +754,7 @@ function renderRiwayat(){
       <div style="flex:1;text-align:center;font-weight:700;font-size:14px;">${monthLabel(state.riwayatMonth)}</div>
       <button id="riwayat-next" class="btn-secondary" style="padding:6px 12px;">&rsaquo;</button>
     </div>
+    ${marketerSummaryHtml()}
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px;">
       <div class="card" style="padding:10px;"><div style="font-size:10px;color:var(--sub);">Omzet nota</div><div style="font-weight:800;font-size:14px;color:var(--accent-ink);">${fmtRp(omzet)}</div></div>
       <div class="card" style="padding:10px;"><div style="font-size:10px;color:var(--sub);">Jumlah transaksi</div><div style="font-weight:800;font-size:14px;">${jumlahTransaksi}</div></div>
@@ -754,6 +833,13 @@ function openNota(tx){
         <div style="text-align:center;font-size:10px;color:#888;margin-top:6px;">Terima kasih atas pembelian Anda &middot; Hub. ${PHONE}</div>
         </div>
       </div>
+      ${isAdminOnly() ? '' : (()=>{ const m = txMargin(tx); return `<div class="card" style="padding:12px;margin-top:12px;">
+        <div style="font-size:12px;font-weight:700;margin-bottom:4px;">Rincian internal <span style="font-weight:500;color:var(--sub);">(tidak ikut di PDF/PNG)</span></div>
+        <div style="font-size:12px;color:var(--sub);">Marketer: <b style="color:var(--ink);">${tx.marketer ? esc(tx.marketer) : '-'}</b></div>
+        ${m.rows.map(r=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;"><span>${esc(r.name)} ${r.qty} &times; (${fmtRp(r.price)} &minus; ${r.office!=null?fmtRp(r.office):'?'})</span><b>${r.share!=null?fmtRp(r.share):'harga kantor belum diisi'}</b></div>`).join('')}
+        <div style="display:flex;justify-content:space-between;font-weight:800;font-size:13px;border-top:1px dashed var(--line);margin-top:4px;padding-top:6px;"><span>Bagian marketer</span><span>${fmtRp(m.total)}${m.missing?' *':''}</span></div>
+        ${m.missing ? `<div style="font-size:10px;color:var(--sub);">* belum termasuk ${m.missing} item tanpa harga kantor. Isi di tab Produk atau Edit Nota.</div>` : ''}
+      </div>`; })()}
       <div style="display:flex;gap:8px;margin-top:14px;">
         <button id="btn-export-pdf" class="btn-primary" style="flex:1;">⬇ PDF</button>
         <button id="btn-export-png" class="btn-secondary" style="flex:1;">⬇ PNG</button>
@@ -778,9 +864,12 @@ function closeNota(){ document.getElementById('modal-root').innerHTML = ''; }
 
 // ---------- SURAT JALAN (seperti nota, tanpa harga & status bayar) ----------
 function openSuratJalan(tx){
+  const hasGram = tx.items.some(it=>it.gramasi||it.pcs); // kolom gramasi hanya tampil jika ada item yang diisi
   const itemsRows = tx.items.map(it=>`
     <tr>
       <td style="padding:7px 4px;border-bottom:1px solid #eee;">${esc(it.name)}</td>
+      ${hasGram ? `<td style="padding:7px 4px;border-bottom:1px solid #eee;text-align:right;">${it.gramasi ? it.gramasi+' gr' : '-'}</td>
+      <td style="padding:7px 4px;border-bottom:1px solid #eee;text-align:right;">${it.pcs ? it.pcs+' pcs' : '-'}</td>` : ''}
       <td style="padding:7px 4px;border-bottom:1px solid #eee;text-align:right;">${it.qty}</td>
     </tr>`).join('');
   const html = `
@@ -812,6 +901,7 @@ function openSuratJalan(tx){
         <table style="width:100%;border-collapse:collapse;font-size:12px;">
           <thead><tr style="background:#f3e9df;">
             <th style="padding:7px 4px;text-align:left;">Nama Produk</th>
+            ${hasGram ? `<th style="padding:7px 4px;text-align:right;">Gramasi</th><th style="padding:7px 4px;text-align:right;">Jml Pcs</th>` : ''}
             <th style="padding:7px 4px;text-align:right;">Jumlah</th>
           </tr></thead>
           <tbody>${itemsRows}</tbody>
@@ -865,7 +955,7 @@ async function exportSuratJalanPng(tx){
 let editDraft = null;
 function openEditNota(tx){
   editDraft = { id: tx.id, date: toDateInput(tx.date), buyerName: tx.buyerName, buyerPhone: tx.buyerPhone, payments: txPayments(tx.id).map(c=>({ id:c.id, date:toDateInput(c.date), origDate:c.date, amount:c.amount, method:c.payment, prefix:(c.desc||'').startsWith('Cicilan')?'Cicilan':'Penjualan', del:false })),
-    discount: tx.discount||0, shipping: tx.shipping||0, items: tx.items.map(it=>({...it})), original: tx };
+    discount: tx.discount||0, shipping: tx.shipping||0, items: tx.items.map(it=>({...it})), original: tx, marketer: tx.marketer||'', officePrices: { ...(tx.officePrices||{}) } };
   renderEditNota();
 }
 function syncEditDraft(){
@@ -906,6 +996,10 @@ function renderEditNota(){
         <input type="number" min="0" step="any" data-edit-qty="${i}" value="${it.qty}" placeholder="Qty" style="flex:1;">
         <input type="text" inputmode="numeric" data-rp data-edit-price="${i}" value="${rpFormat(it.price)}" placeholder="Harga satuan" style="flex:1;">
       </div>
+      <div style="display:flex;gap:8px;margin-top:4px;">
+        <input type="number" min="0" step="any" data-edit-gram="${i}" value="${it.gramasi||''}" placeholder="Gramasi (gr/pcs), opsional" style="flex:1;">
+        <input type="number" min="0" step="1" data-edit-pcs="${i}" value="${it.pcs||''}" placeholder="Jumlah pcs, opsional" style="flex:1;">
+      </div>
       ${it.stockProductId ? `<div style="display:flex;align-items:center;gap:8px;margin-top:4px;font-size:11px;color:var(--brand);"><span style="flex:1;">Stok dikurangi dari ${esc(it.stockName||'produk lain')}:</span><input type="number" min="0" step="any" data-edit-sq="${i}" value="${it.stockQty}" style="flex:1;"></div>` : ''}
     </div>`).join('') || `<div style="color:var(--sub);font-size:13px;padding:8px 0;">Belum ada item.</div>`;
   const options = state.products.map(p=>`<option value="${p.id}">${esc(p.name)} (stok ${p.stock} ${esc(p.unit||'')})</option>`).join('');
@@ -932,6 +1026,12 @@ function renderEditNota(){
           </div>
           <button id="edit-add-item" class="btn-secondary">Tambah ke nota</button>
         </div>
+      </div>
+      <div class="card" style="padding:12px;margin-bottom:12px;">
+        <div style="font-size:12px;font-weight:700;margin-bottom:6px;">Marketer &amp; harga kantor (internal)</div>
+        <input id="edit-marketer" list="marketer-list" value="${esc(d.marketer||'')}" placeholder="Nama marketer (opsional)" autocomplete="off">
+        <datalist id="marketer-list">${marketerNames().map(n=>`<option value="${esc(n)}"></option>`).join('')}</datalist>
+        ${[...new Set(d.items.map(it=>it.productId))].map(pid=>{ const nm = (d.items.find(it=>it.productId===pid)||{}).name; const cur = d.officePrices[pid]; return `<div style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px;"><span style="flex:1;">Harga kantor ${esc(nm)}</span><input type="text" inputmode="numeric" data-rp data-edit-office="${pid}" value="${cur!=null?rpFormat(cur):''}" placeholder="${officePrices[pid]!=null?'saat ini '+rpFormat(officePrices[pid]):'belum diisi'}" style="flex:1;"></div>`; }).join('')}
       </div>
       <div class="card" style="padding:12px;margin-bottom:12px;">
         <div style="display:flex;gap:8px;">
@@ -974,6 +1074,17 @@ function renderEditNota(){
   const $ = s => document.querySelector(s);
   document.querySelectorAll('[data-edit-qty]').forEach(inp=>{
     inp.oninput = ()=>{ d.items[Number(inp.dataset.editQty)].qty = Number(inp.value||0); refreshEditTotals(); };
+  });
+  const mkE = document.getElementById('edit-marketer');
+  if(mkE) mkE.oninput = ()=>{ d.marketer = mkE.value; };
+  document.querySelectorAll('[data-edit-office]').forEach(inp=>{
+    inp.oninput = ()=>{ const v = rpParse(inp.value); if(v>0) d.officePrices[inp.dataset.editOffice] = v; else delete d.officePrices[inp.dataset.editOffice]; };
+  });
+  document.querySelectorAll('[data-edit-gram]').forEach(inp=>{
+    inp.oninput = ()=>{ const it = d.items[Number(inp.dataset.editGram)]; const v = Number(inp.value||0); if(v>0) it.gramasi = v; else delete it.gramasi; };
+  });
+  document.querySelectorAll('[data-edit-pcs]').forEach(inp=>{
+    inp.oninput = ()=>{ const it = d.items[Number(inp.dataset.editPcs)]; const v = Number(inp.value||0); if(v>0) it.pcs = v; else delete it.pcs; };
   });
   document.querySelectorAll('[data-edit-sq]').forEach(inp=>{
     inp.oninput = ()=>{ d.items[Number(inp.dataset.editSq)].stockQty = Number(inp.value||0); };
@@ -1211,6 +1322,9 @@ function attachHandlers(){
     clearFormDraft('stockin');
     fsi.reset();
   };
+  document.querySelectorAll('[data-office-price]').forEach(b=>{
+    b.onclick = ()=>{ const p = state.products.find(x=>x.id===b.dataset.officePrice); if(p) openOfficePrice(p); };
+  });
   document.querySelectorAll('[data-riwayat-admin]').forEach(b=>{
     b.onclick = ()=>{ const p = state.products.find(p=>p.id===b.dataset.riwayatAdmin); if(p) openProductHistoryAdmin(p); };
   });
@@ -1231,6 +1345,9 @@ function attachHandlers(){
     if(!p || qty<=0){ return; }
     if(!price || price<=0){ priceInput.focus(); alert('Isi harga satuan dulu.'); return; }
     const item = {productId:p.id, name:p.name, qty, price};
+    const gramV = Number(document.getElementById('cart-gram').value||0), pcsV = Number(document.getElementById('cart-pcs').value||0);
+    if(gramV>0) item.gramasi = gramV;
+    if(pcsV>0) item.pcs = pcsV;
     const srcOn = document.getElementById('cart-src-toggle');
     if(srcOn && srcOn.checked){
       const sp = state.products.find(x=>x.id===document.getElementById('cart-src-product').value);
@@ -1276,6 +1393,8 @@ function attachHandlers(){
       });
     };
     if(nameEl) nameEl.onblur = ()=>{ setTimeout(()=>{ if(suggestBox) suggestBox.style.display='none'; }, 150); };
+    const mkEl = document.getElementById('kasir-marketer');
+    if(mkEl) mkEl.oninput = ()=>{ kasirDraft.marketer = mkEl.value; saveKasirDraft(); };
     if(phoneEl) phoneEl.oninput = ()=>{ kasirDraft.buyerPhone = phoneEl.value; saveKasirDraft(); };
     if(dateEl) dateEl.oninput = ()=>{ kasirDraft.date = dateEl.value; saveKasirDraft(); };
   }
@@ -1288,7 +1407,7 @@ function attachHandlers(){
     const shipping = rpParse(f.get('shipping'));
     const total = Math.max(0, subtotal - discount + shipping);
     const paid = Math.min(total, Math.max(0, rpParse(f.get('paid'))));
-    const tx = { id: uid(), date: dateFromInput(f.get('date')), buyerName: f.get('buyerName').trim(), buyerPhone: f.get('buyerPhone').trim(), payment: f.get('payment'), items: kasirCart.map(it=>({...it})), subtotal, discount, shipping, total, paid };
+    const tx = { id: uid(), date: dateFromInput(f.get('date')), buyerName: f.get('buyerName').trim(), buyerPhone: f.get('buyerPhone').trim(), marketer: (f.get('marketer')||'').trim(), payment: f.get('payment'), items: kasirCart.map(it=>({...it})), subtotal, discount, shipping, total, paid };
     if(window.__busyTx) return;
     window.__busyTx = true;
     const sbtn = fk.querySelector('button[type=submit]'); if(sbtn){ sbtn.disabled = true; }
@@ -1395,7 +1514,7 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ---------- MAPPING JS <-> KOLOM DATABASE ----------
 const rowToProduct = r => ({ id:r.id, name:r.name, category:r.category, unit:r.unit, price:Number(r.price), stock:Number(r.stock) });
-const rowToTransaction = r => ({ id:r.id, date:r.date, buyerName:r.buyer_name, buyerPhone:r.buyer_phone, payment:r.payment, items:r.items, subtotal:Number(r.subtotal), discount:Number(r.discount), shipping:Number(r.shipping), total:Number(r.total) });
+const rowToTransaction = r => ({ id:r.id, date:r.date, buyerName:r.buyer_name, buyerPhone:r.buyer_phone, payment:r.payment, items:r.items, subtotal:Number(r.subtotal), discount:Number(r.discount), shipping:Number(r.shipping), total:Number(r.total), marketer:r.marketer||'', officePrices:r.office_prices||null });
 const rowToCashflow = r => ({ id:r.id, date:r.date, type:r.type, desc:r.description, amount:Number(r.amount), payment:r.payment, source:r.source, ref:r.ref, category:r.category });
 const rowToStockIn = r => ({ id:r.id, productId:r.product_id, date:r.date, qty:Number(r.qty), note:r.note, price: r.price!=null ? Number(r.price) : null });
 
@@ -1415,12 +1534,17 @@ async function fetchAll(){
     render();
     return;
   }
-  const [{data:products}, {data:transactions}, {data:cashflow}, {data:stockIn}] = await Promise.all([
+  const [{data:products}, {data:transactions}, {data:cashflow}, {data:stockIn}, {data:offRows, error:offErr}] = await Promise.all([
     sb.from('products').select('*').order('name'),
     sb.from('transactions').select('*').order('date',{ascending:false}),
     sb.from('cashflow').select('*').order('date',{ascending:false}),
     sb.from('stock_in').select('*').order('date',{ascending:false}),
+    sb.from('product_office_prices').select('*').order('effective_date',{ascending:false}).order('created_at',{ascending:false}),
   ]);
+  officeReady = !offErr;
+  officeHistory = offRows || [];
+  officePrices = {};
+  officeHistory.forEach(r=>{ if(r.effective_date <= todayInput() && officePrices[r.product_id]==null) officePrices[r.product_id] = Number(r.price); });
   state.products = (products||[]).map(rowToProduct);
   state.transactions = (transactions||[]).map(rowToTransaction);
   state.cashflow = (cashflow||[]).map(rowToCashflow);
@@ -1517,14 +1641,14 @@ async function saveTransaction(tx){
   const { data: rpcRow, error: rpcErr } = await sb.rpc('create_nota', {
     p_date: tx.date, p_buyer_name: tx.buyerName, p_buyer_phone: tx.buyerPhone, p_payment: tx.payment,
     p_items: tx.items, p_subtotal: tx.subtotal, p_discount: tx.discount, p_shipping: tx.shipping,
-    p_total: tx.total, p_paid: tx.paid||0
+    p_total: tx.total, p_paid: tx.paid||0, p_marketer: tx.marketer||null
   });
   if(!rpcErr && rpcRow){
     const t = rowToTransaction(rpcRow);
     const paid = Math.min(tx.total, Math.max(0, tx.paid||0));
     t._pays = paid>0 ? [{ date: tx.date, amount: paid, payment: tx.payment }] : [];
     await fetchAll();
-    return t;
+    return state.transactions.find(x=>x.id===t.id) || t;
   }
   const fnMissing = rpcErr && (rpcErr.code==='PGRST202' || /could not find the function|does not exist/i.test(rpcErr.message||''));
   if(!fnMissing){ alert('Gagal menyimpan nota: '+(rpcErr?.message||'tidak diketahui')); return null; }
@@ -1552,7 +1676,8 @@ async function updateTransaction(oldTx, d){
   const firstMethod = (d.payments.find(p=>!p.del) || {}).method || oldTx.payment;
   const { data: upd, error } = await sb.from('transactions').update({
     date: newDate, buyer_name: d.buyerName.trim(), buyer_phone: d.buyerPhone.trim(), payment: firstMethod,
-    items: d.items, subtotal, discount: d.discount, shipping: d.shipping, total
+    items: d.items, subtotal, discount: d.discount, shipping: d.shipping, total,
+    ...(officeReady && !isAdminOnly() ? { marketer: (d.marketer||'').trim() || null, office_prices: (()=>{ const m = { ...d.officePrices }; d.items.forEach(it=>{ if(m[it.productId]==null && officePrices[it.productId]!=null) m[it.productId] = officePrices[it.productId]; }); return Object.keys(m).length ? m : null; })() } : {})
   }).eq('id', oldTx.id).select();
   if(error){ alert('Gagal menyimpan perubahan: '+error.message); return null; }
   if(!upd || upd.length===0){
