@@ -846,7 +846,7 @@ function openNota(tx){
       </div>
       ${isAdminOnly() ? '' : `<button id="btn-surat-jalan" class="btn-secondary" style="width:100%;margin-top:8px;">🚚 Surat Jalan</button>
       <button id="btn-edit-nota" class="btn-secondary" style="width:100%;margin-top:8px;">✏️ Edit Nota</button>`}
-      ${(state.role==='owner' && st.rest>0) ? `<button id="btn-cancel-tx" style="width:100%;margin-top:8px;background:none;border:none;color:var(--danger-ink);font-size:13px;font-weight:600;padding:6px;">🗑️ Batalkan Transaksi</button>` : ''}
+      ${(state.role==='owner') ? `<button id="btn-cancel-tx" style="width:100%;margin-top:8px;background:none;border:none;color:var(--danger-ink);font-size:13px;font-weight:600;padding:6px;">🗑️ Batalkan Transaksi</button>` : ''}
       <button id="close-nota-2" class="btn-secondary" style="width:100%;margin-top:8px;">Tutup</button>
     </div>
   </div>`;
@@ -1712,7 +1712,8 @@ async function updateTransaction(oldTx, d){
   return state.transactions.find(t=>t.id===oldTx.id) || null;
 }
 async function cancelTransaction(tx){
-  if(!confirm(`Batalkan nota ${tx.buyerName} senilai ${fmtRp(tx.total)}? Stok akan dikembalikan dan nota ini dihapus permanen.`)) return;
+  const paidNow = txPaymentsOf(tx).reduce((s,c)=>s+c.amount,0);
+  if(!confirm(`Batalkan nota ${tx.buyerName} senilai ${fmtRp(tx.total)}?\n\n- Stok akan dikembalikan.\n- Nota dihapus permanen.${paidNow>0 ? `\n- Catatan pembayaran ${fmtRp(paidNow)} di Kas ikut dihapus.` : ''}`)) return;
   const { data: cf } = await sb.from('cashflow').delete().eq('ref', tx.id).eq('source','transaction').select();
   for(const it of tx.items){
     const ss = itemStock(it);
