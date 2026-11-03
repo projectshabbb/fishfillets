@@ -346,8 +346,8 @@ function openOfficePrice(p){
   const hist = officeHistory.filter(r=>r.product_id===p.id);
   const histHtml = hist.slice(0,6).map(r=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;"><span style="color:var(--sub);">Berlaku ${fmtDate(r.effective_date+'T00:00:00')}</span><b>${fmtRp(Number(r.price))}</b></div>`).join('') || `<div style="font-size:12px;color:var(--sub);">Belum ada harga kantor.</div>`;
   document.getElementById('modal-root').innerHTML = `
-  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end;justify-content:center;">
-    <div style="background:var(--bg);width:100%;max-width:420px;border-radius:16px 16px 0 0;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
+  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;">
+    <div style="background:var(--bg);width:100%;max-width:420px;border-radius:16px;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><div style="font-weight:800;">Harga kantor &mdash; ${esc(p.name)}</div><button id="close-op" style="background:none;border:none;font-size:20px;color:var(--sub);">&times;</button></div>
       <div style="font-size:12px;color:var(--sub);margin-bottom:10px;">Harga jual dari kantor (per ${esc(p.unit||'kg')}). Selisih dengan harga di nota = bagian marketer. Nota lama tidak berubah.</div>
       <div style="display:flex;flex-direction:column;gap:8px;">
@@ -427,8 +427,8 @@ async function openProductHistoryAdmin(p){
     : `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);"><div><div style="font-size:13px;font-weight:600;">${fmtDate(r.date)}</div><div style="font-size:11px;color:var(--sub);">Terjual ke ${esc(r.buyer)}${r.via?` (di nota tertulis ${esc(r.via)})`:''}</div></div><div style="font-weight:800;color:var(--danger-ink);">-${r.qty} ${esc(p.unit||'')}</div></div>`
   ).join('') || `<div style="color:var(--sub);font-size:13px;padding:10px 0;">Belum ada riwayat bulan ini.</div>`;
   document.getElementById('modal-root').innerHTML = `
-  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:flex-end;justify-content:center;">
-    <div style="background:var(--bg);width:100%;max-width:520px;max-height:85vh;overflow-y:auto;border-radius:16px 16px 0 0;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
+  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;">
+    <div style="background:var(--bg);width:100%;max-width:520px;max-height:calc(100vh - 32px);overflow-y:auto;border-radius:16px;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;"><div style="font-weight:800;">${esc(p.name)}</div><button id="close-hist-a" style="background:none;border:none;font-size:20px;color:var(--sub);">&times;</button></div>
       <div style="font-size:12px;color:var(--sub);margin-bottom:12px;">Stok saat ini: <b>${p.stock} ${esc(p.unit||'')}</b> &middot; Total pernah masuk: <b>${totalIn} ${esc(p.unit||'')}</b></div>
       ${histBarHtml(histMonth, all, p.unit)}
@@ -571,8 +571,8 @@ function openProductHistory(p){
       <span style="color:var(--sub);">= ${fmtRp(price*qty)}</span>
     </div>`).join('');
   document.getElementById('modal-root').innerHTML = `
-  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:flex-end;justify-content:center;">
-    <div style="background:var(--bg);width:100%;max-width:520px;max-height:85vh;overflow-y:auto;border-radius:16px 16px 0 0;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
+  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;">
+    <div style="background:var(--bg);width:100%;max-width:520px;max-height:calc(100vh - 32px);overflow-y:auto;border-radius:16px;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
         <div style="font-weight:800;">${esc(p.name)}</div>
         <button id="close-history" style="background:none;border:none;font-size:20px;color:var(--sub);">&times;</button>
@@ -876,8 +876,8 @@ function openPartnerRate(key){
   const P = PARTNERS.find(x=>x.key===key); const hist = partnerRates.filter(r=>r.partner===key);
   const cur = partnerRateAt(key, new Date().toISOString());
   document.getElementById('modal-root').innerHTML = `
-  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end;justify-content:center;">
-    <div style="background:var(--bg);width:100%;max-width:420px;border-radius:16px 16px 0 0;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
+  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;">
+    <div style="background:var(--bg);width:100%;max-width:420px;border-radius:16px;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><div style="font-weight:800;">Tarif ${P.name}</div><button id="close-bh" style="background:none;border:none;font-size:20px;color:var(--sub);">&times;</button></div>
       <div style="display:flex;flex-direction:column;gap:8px;">
         <input id="bh-rate" type="text" inputmode="numeric" data-rp value="${cur!=null?rpFormat(cur):''}" placeholder="Tarif per kg (Rp), mis. 1.500">
@@ -903,8 +903,8 @@ function openPartnerRate(key){
 function openPartnerEntry(key, kind){
   const P = PARTNERS.find(x=>x.key===key);
   document.getElementById('modal-root').innerHTML = `
-  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end;justify-content:center;">
-    <div style="background:var(--bg);width:100%;max-width:420px;border-radius:16px 16px 0 0;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
+  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;">
+    <div style="background:var(--bg);width:100%;max-width:420px;border-radius:16px;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><div style="font-weight:800;">${kind==='bayar'?'Catat pengambilan':'Penyesuaian hak'} &mdash; ${P.name}</div><button id="close-bh" style="background:none;border:none;font-size:20px;color:var(--sub);">&times;</button></div>
       <div style="font-size:11px;color:var(--sub);margin-bottom:8px;">${kind==='bayar'?'Uang yang sudah diambil/dibayarkan. Mengurangi sisa.':'Tambahan hak di luar hitungan per kg (bonus, koreksi, dll). Menambah sisa.'}</div>
       <div style="display:flex;flex-direction:column;gap:8px;">
@@ -1003,8 +1003,8 @@ function openNota(tx){
   const payHtml = pays.length ? `<div style="margin-top:8px;font-size:12px;">${pays.map(p=>`<div style="display:flex;justify-content:space-between;padding:2px 0;color:#444;"><span>Dibayar ${shortDate(p.date)} (${p.payment==='cash'?'Cash':'Transfer'})</span><span>${fmtRp(p.amount)}</span></div>`).join('')}</div>` : '';
   const restHtml = st.rest>0 ? `<div style="display:flex;justify-content:space-between;padding-top:6px;margin-top:4px;border-top:1px dashed #ddd;font-weight:800;font-size:14px;color:#a3282c;"><span>SISA TAGIHAN</span><span>${fmtRp(st.rest)}</span></div>` : '';
   const html = `
-  <div id="modal-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:flex-end;justify-content:center;">
-    <div style="background:var(--bg);width:100%;max-width:520px;max-height:92vh;overflow-y:auto;border-radius:16px 16px 0 0;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
+  <div id="modal-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;">
+    <div style="background:var(--bg);width:100%;max-width:520px;max-height:calc(100vh - 32px);overflow-y:auto;border-radius:16px;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
         <div style="font-weight:800;">Nota Transaksi</div>
         <button id="close-nota" style="background:none;border:none;font-size:20px;color:var(--sub);">&times;</button>
@@ -1094,8 +1094,8 @@ function openSuratJalan(tx){
       <td style="padding:7px 4px;border-bottom:1px solid #eee;text-align:right;">${it.qty}</td>
     </tr>`).join('');
   const html = `
-  <div id="modal-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:flex-end;justify-content:center;">
-    <div style="background:var(--bg);width:100%;max-width:520px;max-height:92vh;overflow-y:auto;border-radius:16px 16px 0 0;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
+  <div id="modal-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;">
+    <div style="background:var(--bg);width:100%;max-width:520px;max-height:calc(100vh - 32px);overflow-y:auto;border-radius:16px;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
         <div style="font-weight:800;">Surat Jalan</div>
         <button id="close-sj" style="background:none;border:none;font-size:20px;color:var(--sub);">&times;</button>
@@ -1226,8 +1226,8 @@ function renderEditNota(){
     </div>`).join('') || `<div style="color:var(--sub);font-size:13px;padding:8px 0;">Belum ada item.</div>`;
   const options = state.products.map(p=>`<option value="${p.id}">${esc(p.name)} (stok ${p.stock} ${esc(p.unit||'')})</option>`).join('');
   document.getElementById('modal-root').innerHTML = `
-  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:flex-end;justify-content:center;">
-    <div style="background:var(--bg);width:100%;max-width:520px;max-height:92vh;overflow-y:auto;border-radius:16px 16px 0 0;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
+  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;">
+    <div style="background:var(--bg);width:100%;max-width:520px;max-height:calc(100vh - 32px);overflow-y:auto;border-radius:16px;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
       <div style="font-weight:800;margin-bottom:2px;">Edit Nota</div>
       <div style="font-size:11px;color:var(--sub);margin-bottom:12px;">Nota tanggal ${fmtDate(d.original.date)}</div>
       <div class="card" style="padding:12px;margin-bottom:10px;display:flex;flex-direction:column;gap:8px;">
@@ -1407,8 +1407,8 @@ function openLaporanModal(monthKeyStr){
   const rowIn = (cat,amt)=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px;"><span>${esc(cat)}</span><span style="color:var(--accent-ink);font-weight:600;">${fmtRp(amt)}</span></div>`;
   const rowOut = (cat,amt)=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px;"><span>${esc(cat)}</span><span style="color:var(--danger-ink);font-weight:600;">${fmtRp(amt)}</span></div>`;
   document.getElementById('modal-root').innerHTML = `
-  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:flex-end;justify-content:center;">
-    <div style="background:var(--bg);width:100%;max-width:520px;max-height:88vh;overflow-y:auto;border-radius:16px 16px 0 0;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
+  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;">
+    <div style="background:var(--bg);width:100%;max-width:520px;max-height:calc(100vh - 32px);overflow-y:auto;border-radius:16px;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
         <div style="font-weight:800;">Laporan Keuangan</div>
         <button id="close-laporan" style="background:none;border:none;font-size:20px;color:var(--sub);">&times;</button>
@@ -1888,8 +1888,8 @@ async function updateStockIn(stockInId, productId, newQty, newPrice, newDateStr,
 }
 function openEditStockIn(row, p){
   document.getElementById('modal-root').innerHTML = `
-  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end;justify-content:center;">
-    <div style="background:var(--bg);width:100%;max-width:420px;border-radius:16px 16px 0 0;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
+  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;">
+    <div style="background:var(--bg);width:100%;max-width:420px;border-radius:16px;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
         <div style="font-weight:800;">Edit Stok Masuk</div>
         <button id="close-esi" style="background:none;border:none;font-size:20px;color:var(--sub);">&times;</button>
@@ -2050,8 +2050,8 @@ async function updateCashEntry(c, d){
 function openEditKas(c){
   const cats = (KAS_CATEGORIES[c.type]||[]).slice(); if(c.category && !cats.includes(c.category)) cats.unshift(c.category);
   document.getElementById('modal-root').innerHTML = `
-  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end;justify-content:center;">
-    <div style="background:var(--bg);width:100%;max-width:420px;border-radius:16px 16px 0 0;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
+  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;">
+    <div style="background:var(--bg);width:100%;max-width:420px;border-radius:16px;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
         <div style="font-weight:800;">Edit Catatan Kas (${c.type==='in'?'Masuk':'Keluar'})</div>
         <button id="close-ek" style="background:none;border:none;font-size:20px;color:var(--sub);">&times;</button>
