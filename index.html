@@ -116,6 +116,7 @@
     <button class="tab-btn" data-tab="kasir">🧾<span>Kasir</span></button>
     <button class="tab-btn" data-tab="kas">💰<span>Kas</span></button>
     <button class="tab-btn" data-tab="riwayat">🕘<span>Riwayat</span></button>
+    <button class="tab-btn" data-tab="bagihasil">🤝<span>Bagi Hasil</span></button>
     <div id="user-badge" style="margin-top:auto;padding:8px 10px;font-size:10px;color:var(--sub);border-top:1px solid var(--line);"></div>
     <button id="btn-logout" class="tab-btn">🚪<span>Keluar</span></button>
   </nav>
@@ -185,7 +186,7 @@ const shiftMonth = (key, delta) => { const [y,m] = key.split('-').map(Number); c
 const nowMonth = () => monthKey(new Date().toISOString());
 const KAS_CATEGORIES = {
   in: ['Saldo', 'Penjualan Produk'],
-  out: ['Pabrik', 'Fee Marketer', 'Ongkir Produk', 'Mas Dimas', 'Pak Syifa', 'Freezer', 'Lain-lain'],
+  out: ['Pabrik', 'Fee Marketer', 'Fee Gramasi', 'Ongkir Produk', 'Pengembalian Saldo', 'Mas Dimas', 'Pak Syifa', 'Freezer', 'Lain-lain'],
 };
 function kasCategoryOptions(type, selected){
   const list = KAS_CATEGORIES[type] || KAS_CATEGORIES.in;
@@ -228,6 +229,7 @@ function itemSources(it){   // daftar {pid, qty} yang stoknya dikurangi oleh ite
   if(it.stockProductId) return [{ pid: it.stockProductId, qty: Number(it.stockQty)||0 }];
   return [{ pid: it.productId, qty: Number(it.qty)||0 }];
 }
+let partnerRates = [], partnerEntries = [], partnerReady = false;
 let adjustments = [];       // catatan stok keluar lain / koreksi (khusus owner)
 let adjReady = false;
 const ADJ_LABEL = { sample:'Sample (gratis)', rusak:'Rusak / hilang', koreksi:'Koreksi hitung gudang' };
@@ -262,7 +264,7 @@ const statusPill = key => key==='lunas'
   : '<span class="pill" style="background:var(--danger);color:var(--danger-ink);">Belum bayar</span>';
 let state = { products: [], transactions: [], cashflow: [], stockIn: [], tab: 'dashboard', ready:false, role:'admin', kasMonth: nowMonth(), riwayatMonth: nowMonth() };
 
-function allowedTabs(){ return isAdminOnly() ? ['produk','kasir','riwayat'] : ['dashboard','produk','kasir','kas','riwayat']; }
+function allowedTabs(){ return isAdminOnly() ? ['produk','kasir','riwayat'] : ['dashboard','produk','kasir','kas','riwayat','bagihasil']; }
 function render(){
   if(!allowedTabs().includes(state.tab)) state.tab = isAdminOnly() ? 'produk' : 'dashboard';
   document.querySelectorAll('.tab-btn[data-tab]').forEach(b=>{ b.style.display = allowedTabs().includes(b.dataset.tab) ? '' : 'none'; });
@@ -274,6 +276,7 @@ function render(){
   else if(state.tab==='kasir') el.innerHTML = renderKasir();
   else if(state.tab==='kas') el.innerHTML = renderKas();
   else if(state.tab==='riwayat') el.innerHTML = renderRiwayat();
+  else if(state.tab==='bagihasil') el.innerHTML = renderBagiHasil();
   attachHandlers();
 }
 
@@ -375,28 +378,67 @@ function openOfficePrice(p){
     await fetchAll();
   };
 }
+// ---- Riwayat produk per bulan (geser bulan) ----
+let histMonthByProduct = {};
+function histNet(r){ return r.kind==='in' ? Number(r.qty) : (r.kind==='out' ? -Number(r.qty) : Number(r.delta)); }
+function histPickMonth(pid, all){
+  if(histMonthByProduct[pid]) return histMonthByProduct[pid];
+  const cur = nowMonth();
+  if(!all.length || all.some(r=>monthKey(r.date)===cur)) return cur;
+  return monthKey(all[0].date);   // belum ada catatan bulan ini: tampilkan bulan terakhir yang ada catatan
+}
+function histBarHtml(month, all, unit){
+  const r1 = x=>Math.round(x*1000)/1000;
+  const mine = all.filter(r=>monthKey(r.date)===month);
+  const awal = all.filter(r=>monthKey(r.date)<month).reduce((s,r)=>s+histNet(r),0);
+  const masuk = mine.filter(r=>r.kind==='in').reduce((s,r)=>s+Number(r.qty),0);
+  const keluar = mine.filter(r=>r.kind==='out').reduce((s,r)=>s+Number(r.qty),0);
+  const adj = mine.filter(r=>r.kind==='adj').reduce((s,r)=>s+Number(r.delta),0);
+  const akhir = awal + masuk - keluar + adj;
+  const u = esc(unit||'');
+  return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+      <button id="hist-prev" class="btn-secondary" style="padding:6px 12px;">&lsaquo;</button>
+      <div style="flex:1;text-align:center;font-weight:700;font-size:14px;">${monthLabel(month)}</div>
+      <button id="hist-next" class="btn-secondary" style="padding:6px 12px;" ${month>=nowMonth()?'disabled':''}>&rsaquo;</button>
+    </div>
+    <div class="card" style="padding:10px;margin-bottom:10px;font-size:12px;">
+      <div style="display:flex;justify-content:space-between;"><span style="color:var(--sub);">Saldo awal bulan (menurut riwayat)</span><b>${r1(awal)} ${u}</b></div>
+      <div style="display:flex;justify-content:space-between;"><span style="color:var(--sub);">Masuk</span><b style="color:var(--accent-ink);">+${r1(masuk)} ${u}</b></div>
+      <div style="display:flex;justify-content:space-between;"><span style="color:var(--sub);">Keluar (terjual)</span><b style="color:var(--danger-ink);">-${r1(keluar)} ${u}</b></div>
+      ${adj ? `<div style="display:flex;justify-content:space-between;"><span style="color:var(--sub);">Sample / koreksi</span><b>${adj>0?'+':''}${r1(adj)} ${u}</b></div>` : ''}
+      <div style="display:flex;justify-content:space-between;border-top:1px dashed var(--line);margin-top:4px;padding-top:4px;"><span style="color:var(--sub);">Saldo akhir bulan</span><b>${r1(akhir)} ${u}</b></div>
+    </div>`;
+}
+function histBindNav(p, month, reopen, close){
+  const prev = document.getElementById('hist-prev'), next = document.getElementById('hist-next');
+  if(prev) prev.onclick = ()=>{ histMonthByProduct[p.id] = shiftMonth(month,-1); reopen(); };
+  if(next) next.onclick = ()=>{ if(month>=nowMonth()) return; histMonthByProduct[p.id] = shiftMonth(month,1); reopen(); };
+}
 async function openProductHistoryAdmin(p){
   const { data, error } = await sb.rpc('product_history', { p_product_id: p.id });
   if(error || !data){ alert('Riwayat belum bisa dibuka. Minta owner menjalankan SQL migration_riwayat_admin.sql di Supabase.' + (error ? '\n\nDetail: '+(error.message||error.code) : '')); return; }
   const all = [...(data.in||[]).map(r=>({...r,kind:'in'})), ...(data.out||[]).map(r=>({...r,kind:'out'})), ...(data.adj||[]).map(r=>({...r,adjKind:r.kind,kind:'adj'}))].sort((a,b)=>new Date(b.date)-new Date(a.date));
   const totalIn = (data.in||[]).reduce((s,r)=>s+Number(r.qty),0);
-  const rows = all.map(r=> r.kind==='adj'
+  const histMonth = histPickMonth(p.id, all);
+  const rows = all.filter(r=>monthKey(r.date)===histMonth).map(r=> r.kind==='adj'
     ? `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);"><div><div style="font-size:13px;font-weight:600;">${fmtDate(r.date)}</div><div style="font-size:11px;color:var(--sub);">${esc(ADJ_LABEL[r.adjKind]||'')}${r.note?' &middot; '+esc(r.note):''}</div></div><div style="font-weight:800;color:${Number(r.delta)<0?'var(--danger-ink)':'var(--accent-ink)'};">${Number(r.delta)>0?'+':''}${r.delta} ${esc(p.unit||'')}</div></div>`
     : r.kind==='in'
     ? `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);"><div><div style="font-size:13px;font-weight:600;">${fmtDate(r.date)}</div>${r.note?`<div style="font-size:11px;color:var(--sub);">${esc(r.note)}</div>`:''}</div><div style="font-weight:800;color:var(--accent-ink);">+${r.qty} ${esc(p.unit||'')}</div></div>`
     : `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);"><div><div style="font-size:13px;font-weight:600;">${fmtDate(r.date)}</div><div style="font-size:11px;color:var(--sub);">Terjual ke ${esc(r.buyer)}${r.via?` (di nota tertulis ${esc(r.via)})`:''}</div></div><div style="font-weight:800;color:var(--danger-ink);">-${r.qty} ${esc(p.unit||'')}</div></div>`
-  ).join('') || `<div style="color:var(--sub);font-size:13px;padding:10px 0;">Belum ada riwayat untuk produk ini.</div>`;
+  ).join('') || `<div style="color:var(--sub);font-size:13px;padding:10px 0;">Belum ada riwayat bulan ini.</div>`;
   document.getElementById('modal-root').innerHTML = `
   <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:flex-end;justify-content:center;">
     <div style="background:var(--bg);width:100%;max-width:520px;max-height:85vh;overflow-y:auto;border-radius:16px 16px 0 0;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;"><div style="font-weight:800;">${esc(p.name)}</div><button id="close-hist-a" style="background:none;border:none;font-size:20px;color:var(--sub);">&times;</button></div>
       <div style="font-size:12px;color:var(--sub);margin-bottom:12px;">Stok saat ini: <b>${p.stock} ${esc(p.unit||'')}</b> &middot; Total pernah masuk: <b>${totalIn} ${esc(p.unit||'')}</b></div>
+      ${histBarHtml(histMonth, all, p.unit)}
       ${rows}
       <button id="close-hist-a2" class="btn-secondary" style="width:100%;margin-top:14px;">Tutup</button>
     </div>
   </div>`;
-  const c = ()=>{ document.getElementById('modal-root').innerHTML=''; };
+  const c = ()=>{ delete histMonthByProduct[p.id]; document.getElementById('modal-root').innerHTML=''; };
   document.getElementById('close-hist-a').onclick = c; document.getElementById('close-hist-a2').onclick = c;
+  histBindNav(p, histMonth, ()=>openProductHistoryAdmin(p));
 }
 function renderProduk(){
   if(isAdminOnly()) return renderProdukAdmin();
@@ -490,7 +532,8 @@ function openProductHistory(p){
   });
   const adjRows = adjustments.filter(a=>a.product_id===p.id).map(a=>({ id:a.id, date:a.date, createdAt:a.created_at, kind:'adj', adjKind:a.kind, delta:Number(a.delta), note:a.note }));
   const all = [...inRows, ...outRows, ...adjRows].sort(cmpNewest);
-  const rows = all.map(r=>{
+  const histMonth = histPickMonth(p.id, all);
+  const rows = all.filter(r=>monthKey(r.date)===histMonth).map(r=>{
     if(r.kind==='in'){
       return `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);">
         <div><div style="font-size:13px;font-weight:600;">${fmtDate(r.date)}</div>${r.note?`<div style="font-size:11px;color:var(--sub);">${esc(r.note)}</div>`:''}</div>
@@ -512,7 +555,7 @@ function openProductHistory(p){
       <div><div style="font-size:13px;font-weight:600;">${fmtDate(r.date)}</div><div style="font-size:11px;color:var(--sub);">Terjual ke ${esc(r.buyer)}${r.via?` (di nota tertulis ${esc(r.via)})`:''}</div></div>
       <div style="font-weight:800;color:var(--danger-ink);">-${r.qty} ${esc(p.unit||'')}</div>
     </div>`;
-  }).join('') || `<div style="color:var(--sub);font-size:13px;padding:10px 0;">Belum ada riwayat untuk produk ini.</div>`;
+  }).join('') || `<div style="color:var(--sub);font-size:13px;padding:10px 0;">Belum ada riwayat bulan ini.</div>`;
   const expected = Math.round((inRows.reduce((s,r)=>s+r.qty,0) - outRows.reduce((s,r)=>s+r.qty,0) + adjRows.reduce((s,r)=>s+r.delta,0))*1000)/1000;
   const diffStock = Math.round((p.stock - expected)*1000)/1000;
   const mismatchHtml = diffStock!==0 ? `<div class="card" style="padding:12px;margin-bottom:12px;border:1px solid var(--danger-ink);">
@@ -540,13 +583,15 @@ function openProductHistory(p){
         <div style="font-size:12px;font-weight:700;margin-bottom:4px;">Ringkasan harga beli (sejak awal)</div>
         ${priceSummary}
       </div>` : ''}
+      ${histBarHtml(histMonth, all, p.unit)}
       ${rows}
       <button id="close-history-2" class="btn-secondary" style="width:100%;margin-top:14px;">Tutup</button>
     </div>
   </div>`;
-  const close = ()=>{ document.getElementById('modal-root').innerHTML=''; };
+  const close = ()=>{ delete histMonthByProduct[p.id]; document.getElementById('modal-root').innerHTML=''; };
   document.getElementById('close-history').onclick = close;
   document.getElementById('close-history-2').onclick = close;
+  histBindNav(p, histMonth, ()=>openProductHistory(state.products.find(x=>x.id===p.id)||p));
   const sync = document.getElementById('btn-sync-stock');
   if(sync) sync.onclick = async ()=>{
     if(!confirm(`Ubah stok ${p.name} dari ${p.stock} menjadi ${expected} sesuai riwayat?`)) return;
@@ -766,6 +811,129 @@ function marketerSummaryHtml(){
     ${missing ? `<div style="font-size:10px;color:var(--sub);margin-top:4px;">* ${missing} item belum punya harga kantor (tidak dihitung).</div>` : ''}
     <div style="font-size:10px;color:var(--sub);margin-top:4px;">Bisa dicocokkan dengan catatan &ldquo;Fee Marketer&rdquo; di tab Kas.</div>
   </div>`;
+}
+// ---------- BAGI HASIL (Mas Dimas & Pak Syifa) ----------
+const PARTNERS = [ { key:'dimas', name:'Mas Dimas', kasCat:'Mas Dimas' }, { key:'syifa', name:'Pak Syifa', kasCat:'Pak Syifa' } ];
+function partnerRateAt(key, iso){
+  const day = toDateInput(iso);
+  const r = partnerRates.filter(x=>x.partner===key && x.effective_date<=day).sort((a,b)=> a.effective_date<b.effective_date?1:-1)[0];
+  return r ? Number(r.rate) : null;
+}
+function partnerCompute(key){
+  // kg yang benar-benar keluar gudang = jumlah stok yang dikurangi oleh setiap nota
+  const events = state.transactions.map(t=>({ date:t.date, createdAt:t.createdAt, buyer:t.buyerName, kg: t.items.reduce((s,it)=>s+itemSources(it).reduce((a,x)=>a+x.qty,0),0) }));
+  let kgCounted = 0, earned = 0; const rows = [];
+  events.forEach(e=>{
+    const rate = partnerRateAt(key, e.date);
+    if(rate==null || !(e.kg>0)) return;
+    kgCounted += e.kg; earned += e.kg*rate; rows.push({ ...e, rate, share: e.kg*rate });
+  });
+  const entries = partnerEntries.filter(x=>x.partner===key);
+  const extra = entries.filter(x=>x.kind==='tambah').reduce((s,x)=>s+Number(x.amount),0);
+  const paid = entries.filter(x=>x.kind==='bayar').reduce((s,x)=>s+Number(x.amount),0);
+  const hak = earned + extra;
+  return { kgCounted, earned, extra, hak, paid, sisa: hak - paid, rows: rows.sort(cmpNewest), entries: entries.sort(cmpNewest) };
+}
+function renderBagiHasil(){
+  if(!partnerReady) return `<h1 style="font-size:18px;font-weight:800;margin:0 0 2px;">🤝 Bagi Hasil</h1>
+    <div class="card" style="padding:14px;margin-top:12px;font-size:13px;">Menu ini butuh tabel baru di database. Jalankan SQL <b>migration_bagi_hasil.sql</b> di Supabase (SQL Editor), lalu muat ulang halaman.</div>`;
+  const cards = PARTNERS.map(P=>{
+    const c = partnerCompute(P.key);
+    const curRate = partnerRateAt(P.key, new Date().toISOString());
+    const pct = c.hak>0 ? Math.max(0, Math.min(100, Math.round(c.paid/c.hak*100))) : 0;
+    const entriesHtml = c.entries.slice(0,12).map(x=>`
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--line);font-size:12px;">
+        <div><div style="font-weight:600;">${fmtDate(x.date)} &middot; ${x.kind==='bayar'?'Diambil / dibayar':'Penyesuaian (+)'}</div>${x.note?`<div style="font-size:11px;color:var(--sub);">${esc(x.note)}</div>`:''}</div>
+        <div style="text-align:right;"><b style="color:${x.kind==='bayar'?'var(--danger-ink)':'var(--accent-ink)'};">${x.kind==='bayar'?'-':'+'}${fmtRp(Number(x.amount))}</b><br><button data-bh-del="${x.id}" style="font-size:10px;color:var(--danger-ink);background:none;border:none;font-weight:600;">Hapus</button></div>
+      </div>`).join('') || `<div style="font-size:12px;color:var(--sub);padding:6px 0;">Belum ada catatan pengambilan.</div>`;
+    const rowsHtml = c.rows.slice(0,30).map(r=>`<div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;"><span>${fmtDate(r.date)} &middot; ${esc(r.buyer)} &middot; ${r.kg} kg &times; ${fmtRp(r.rate)}</span><b>${fmtRp(r.share)}</b></div>`).join('');
+    return `<div class="card" style="padding:14px;margin-bottom:14px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div style="font-weight:800;font-size:15px;">${P.name}</div>
+        <button data-bh-rate="${P.key}" style="font-size:12px;color:var(--brand);background:none;border:none;font-weight:700;">Tarif: ${curRate!=null ? fmtRp(curRate)+'/kg' : 'belum diisi'} &rsaquo;</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0;">
+        <div class="card" style="padding:10px;"><div style="font-size:10px;color:var(--sub);">Kg keluar (dihitung)</div><div style="font-weight:800;font-size:16px;">${Math.round(c.kgCounted*100)/100} kg</div></div>
+        <div class="card" style="padding:10px;"><div style="font-size:10px;color:var(--sub);">Hak terkumpul</div><div style="font-weight:800;font-size:16px;">${fmtRp(c.hak)}</div>${c.extra?`<div style="font-size:10px;color:var(--sub);">termasuk penyesuaian ${fmtRp(c.extra)}</div>`:''}</div>
+        <div class="card" style="padding:10px;"><div style="font-size:10px;color:var(--sub);">Sudah diambil</div><div style="font-weight:800;font-size:16px;color:var(--danger-ink);">${fmtRp(c.paid)}</div></div>
+        <div class="card" style="padding:10px;"><div style="font-size:10px;color:var(--sub);">Sisa belum diambil</div><div style="font-weight:800;font-size:16px;color:${c.sisa>0?'var(--brand2)':'var(--accent-ink)'};">${fmtRp(c.sisa)}</div></div>
+      </div>
+      <div style="height:8px;background:var(--line);border-radius:6px;overflow:hidden;"><div style="height:100%;width:${pct}%;background:var(--brand);"></div></div>
+      <div style="font-size:11px;color:var(--sub);margin-top:4px;">${pct}% dari hak sudah diambil</div>
+      <div style="display:flex;gap:8px;margin-top:10px;">
+        <button class="btn-primary" data-bh-entry="${P.key}:bayar" style="flex:1;">+ Catat pengambilan</button>
+        <button class="btn-secondary" data-bh-entry="${P.key}:tambah" style="flex:1;">+ Penyesuaian</button>
+      </div>
+      <div style="margin-top:10px;">${entriesHtml}</div>
+      <details style="margin-top:8px;"><summary style="font-size:12px;font-weight:700;cursor:pointer;">Rincian hak per nota (${c.rows.length})</summary><div style="margin-top:6px;">${rowsHtml || '<div style="font-size:11px;color:var(--sub);">Belum ada. Isi tarif dulu (tombol Tarif di atas).</div>'}</div></details>
+    </div>`;
+  }).join('');
+  return `<h1 style="font-size:18px;font-weight:800;margin:0 0 2px;">🤝 Bagi Hasil</h1>
+    <p style="font-size:12px;color:var(--sub);margin:0 0 14px;">Hak per kg keluar gudang, yang sudah diambil, dan sisanya.</p>${cards}
+    <div style="font-size:11px;color:var(--sub);">Kg dihitung dari stok yang benar-benar dikurangi oleh nota (sample/koreksi tidak dihitung). Nota yang dibatalkan otomatis tidak dihitung. Tarif berlaku mulai tanggal yang Anda isi; nota sebelum tanggal itu tidak dihitung.</div>`;
+}
+function openPartnerRate(key){
+  const P = PARTNERS.find(x=>x.key===key); const hist = partnerRates.filter(r=>r.partner===key);
+  const cur = partnerRateAt(key, new Date().toISOString());
+  document.getElementById('modal-root').innerHTML = `
+  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end;justify-content:center;">
+    <div style="background:var(--bg);width:100%;max-width:420px;border-radius:16px 16px 0 0;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><div style="font-weight:800;">Tarif ${P.name}</div><button id="close-bh" style="background:none;border:none;font-size:20px;color:var(--sub);">&times;</button></div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <input id="bh-rate" type="text" inputmode="numeric" data-rp value="${cur!=null?rpFormat(cur):''}" placeholder="Tarif per kg (Rp), mis. 1.500">
+        <div style="font-size:11px;color:var(--sub);">Berlaku mulai tanggal (nota sebelum tanggal ini tidak dihitung)</div>
+        <input id="bh-date" type="date" value="${hist.length ? todayInput() : ''}">
+        <button id="bh-save" class="btn-primary">Simpan tarif</button>
+      </div>
+      <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:8px;">${hist.sort((a,b)=>a.effective_date<b.effective_date?1:-1).map(r=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;"><span style="color:var(--sub);">Mulai ${fmtDate(r.effective_date+'T12:00:00')}</span><b>${fmtRp(Number(r.rate))}/kg <button data-bh-rate-del="${r.id}" style="font-size:10px;color:var(--danger-ink);background:none;border:none;margin-left:6px;">Hapus</button></b></div>`).join('') || '<div style="font-size:12px;color:var(--sub);">Belum ada tarif.</div>'}</div>
+    </div>
+  </div>`;
+  bindAllRp(document.getElementById('modal-root'));
+  document.getElementById('close-bh').onclick = ()=>{ document.getElementById('modal-root').innerHTML=''; };
+  document.querySelectorAll('[data-bh-rate-del]').forEach(b=>{ b.onclick = async ()=>{ if(!confirm('Hapus tarif ini?')) return; await sb.from('partner_rates').delete().eq('id', b.dataset.bhRateDel); await fetchAll(); openPartnerRate(key); }; });
+  document.getElementById('bh-save').onclick = async ()=>{
+    const rate = rpVal('bh-rate'); const date = document.getElementById('bh-date').value;
+    if(!(rate>0)){ alert('Isi tarif per kg.'); return; }
+    if(!date){ alert('Isi tanggal mulai berlaku. Pilih tanggal nota pertama yang ingin dihitung.'); return; }
+    const { error } = await sb.from('partner_rates').insert({ partner:key, rate, effective_date:date });
+    if(error){ alert('Gagal menyimpan: '+error.message); return; }
+    document.getElementById('modal-root').innerHTML=''; await fetchAll();
+  };
+}
+function openPartnerEntry(key, kind){
+  const P = PARTNERS.find(x=>x.key===key);
+  document.getElementById('modal-root').innerHTML = `
+  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end;justify-content:center;">
+    <div style="background:var(--bg);width:100%;max-width:420px;border-radius:16px 16px 0 0;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><div style="font-weight:800;">${kind==='bayar'?'Catat pengambilan':'Penyesuaian hak'} &mdash; ${P.name}</div><button id="close-bh" style="background:none;border:none;font-size:20px;color:var(--sub);">&times;</button></div>
+      <div style="font-size:11px;color:var(--sub);margin-bottom:8px;">${kind==='bayar'?'Uang yang sudah diambil/dibayarkan. Mengurangi sisa.':'Tambahan hak di luar hitungan per kg (bonus, koreksi, dll). Menambah sisa.'}</div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <input id="bhe-amount" type="text" inputmode="numeric" data-rp placeholder="Jumlah (Rp)">
+        <input id="bhe-date" type="date" value="${todayInput()}" max="${todayInput()}">
+        <input id="bhe-note" placeholder="Catatan (bebas)">
+        ${kind==='bayar' ? `<select id="bhe-pay"><option value="transfer">Transfer</option><option value="cash">Cash</option></select>
+        <label style="display:flex;gap:8px;font-size:12px;color:var(--sub);align-items:flex-start;"><input type="checkbox" id="bhe-kas" style="width:auto;margin-top:2px;"> Catat juga sebagai pengeluaran di tab Kas (kategori ${P.kasCat}). Jangan dicentang kalau sudah dicatat di Kas, supaya tidak dobel.</label>` : ''}
+        <button id="bhe-save" class="btn-primary">Simpan</button>
+      </div>
+    </div>
+  </div>`;
+  bindAllRp(document.getElementById('modal-root'));
+  document.getElementById('close-bh').onclick = ()=>{ document.getElementById('modal-root').innerHTML=''; };
+  document.getElementById('bhe-save').onclick = async ()=>{
+    if(window.__busyBh) return;
+    const amount = rpVal('bhe-amount'); const dateStr = document.getElementById('bhe-date').value; const note = document.getElementById('bhe-note').value.trim();
+    if(!(amount>0)){ alert('Isi jumlah.'); return; }
+    window.__busyBh = true; document.getElementById('bhe-save').disabled = true;
+    try{
+      const pay = kind==='bayar' ? document.getElementById('bhe-pay').value : null;
+      const { error } = await sb.from('partner_entries').insert({ partner:key, kind, amount, date: dateFromInput(dateStr), payment: pay, note: note||null });
+      if(error){ alert('Gagal menyimpan: '+error.message); return; }
+      if(kind==='bayar' && document.getElementById('bhe-kas').checked){
+        await sb.from('cashflow').insert({ date: dateFromInput(dateStr), type:'out', category:P.kasCat, description: note||('Pengambilan '+P.name), amount, payment: pay, source:'manual' });
+      }
+      document.getElementById('modal-root').innerHTML=''; await fetchAll();
+    } finally { window.__busyBh = false; }
+  };
 }
 function renderRiwayat(){
   const items = [
@@ -1406,6 +1574,11 @@ function attachHandlers(){
       finally{ window.__busyAdj = false; }
     };
   }
+  document.querySelectorAll('[data-bh-rate]').forEach(b=>{ b.onclick = ()=>openPartnerRate(b.dataset.bhRate); });
+  document.querySelectorAll('[data-bh-entry]').forEach(b=>{ b.onclick = ()=>{ const [k,kind] = b.dataset.bhEntry.split(':'); openPartnerEntry(k, kind); }; });
+  document.querySelectorAll('[data-bh-del]').forEach(b=>{
+    b.onclick = async ()=>{ if(!confirm('Hapus catatan ini?')) return; await sb.from('partner_entries').delete().eq('id', b.dataset.bhDel); await fetchAll(); };
+  });
   document.querySelectorAll('[data-office-price]').forEach(b=>{
     b.onclick = ()=>{ const p = state.products.find(x=>x.id===b.dataset.officePrice); if(p) openOfficePrice(p); };
   });
@@ -1633,14 +1806,17 @@ async function fetchAll(){
     render();
     return;
   }
-  const [{data:products}, {data:transactions}, {data:cashflow}, {data:stockIn}, {data:offRows, error:offErr}, {data:adjRowsData, error:adjErr}] = await Promise.all([
+  const [{data:products}, {data:transactions}, {data:cashflow}, {data:stockIn}, {data:offRows, error:offErr}, {data:adjRowsData, error:adjErr}, {data:prData, error:prErr}, {data:peData, error:peErr}] = await Promise.all([
     sb.from('products').select('*').order('name'),
     sb.from('transactions').select('*').order('date',{ascending:false}),
     sb.from('cashflow').select('*').order('date',{ascending:false}),
     sb.from('stock_in').select('*').order('date',{ascending:false}),
     sb.from('product_office_prices').select('*').order('effective_date',{ascending:false}).order('created_at',{ascending:false}),
     sb.from('stock_adjustments').select('*').order('date',{ascending:false}),
+    sb.from('partner_rates').select('*').order('effective_date',{ascending:false}),
+    sb.from('partner_entries').select('*').order('date',{ascending:false}),
   ]);
+  partnerReady = !prErr && !peErr; partnerRates = prData || []; partnerEntries = peData || [];
   adjReady = !adjErr; adjustments = adjRowsData || [];
   officeReady = !offErr;
   officeHistory = offRows || [];
