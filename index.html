@@ -251,6 +251,22 @@ function txMargin(tx){      // bagian marketer = (harga nota - harga kantor) x q
   });
   return { total, missing, rows };
 }
+function txRealCost(tx){    // harga kantor sesuai stok yang benar-benar keluar (hanya item yang stoknya beda produk)
+  const op = tx.officePrices || {}; const rows = []; let total = 0, nota = 0, missing = 0;
+  (tx.items||[]).forEach(it=>{
+    const src = itemSources(it);
+    if(src.length===1 && src[0].pid===it.productId && Math.abs(src[0].qty-(Number(it.qty)||0))<1e-9) return;
+    nota += (Number(it.price)||0) * (Number(it.qty)||0);
+    src.forEach(x=>{
+      const pr = state.products.find(p=>p.id===x.pid);
+      const o = op[x.pid]!=null ? op[x.pid] : officePrices[x.pid];
+      if(o==null){ missing++; rows.push({ item:it.name, name:pr?pr.name:'(produk dihapus)', qty:x.qty, office:null, cost:null }); return; }
+      const cost = Number(o) * x.qty; total += cost;
+      rows.push({ item:it.name, name:pr?pr.name:'(produk dihapus)', qty:x.qty, office:Number(o), cost });
+    });
+  });
+  return { rows, total, nota, missing };
+}
 function txPayments(txId){ return state.cashflow.filter(c=>c.ref===txId && c.source==='transaction' && c.type==='in').sort(cmpOldest); }
 function txStatus(tx){
   const paid = txPaymentsOf(tx).reduce((s,c)=>s+c.amount,0);
@@ -1060,6 +1076,14 @@ function openNota(tx){
         ${m.rows.map(r=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;"><span>${esc(r.name)} ${r.qty} &times; (${fmtRp(r.price)} &minus; ${r.office!=null?fmtRp(r.office):'?'})</span><b>${r.share!=null?fmtRp(r.share):'harga kantor belum diisi'}</b></div>`).join('')}
         <div style="display:flex;justify-content:space-between;font-weight:800;font-size:13px;border-top:1px dashed var(--line);margin-top:4px;padding-top:6px;"><span>Bagian marketer</span><span>${fmtRp(m.total)}${m.missing?' *':''}</span></div>
         ${m.missing ? `<div style="font-size:10px;color:var(--sub);">* belum termasuk ${m.missing} item tanpa harga kantor. Isi di tab Produk atau Edit Nota.</div>` : ''}
+        ${(()=>{ const rc = txRealCost(tx); if(!rc.rows.length) return ''; return `<div style="border-top:1px solid var(--line);margin-top:10px;padding-top:8px;">
+          <div style="font-size:12px;font-weight:700;margin-bottom:2px;">Harga asli sesuai stok yang keluar</div>
+          <div style="font-size:10.5px;color:var(--sub);margin-bottom:4px;">Stok diambil dari produk lain, dihitung dengan harga kantor produk yang keluar.</div>
+          ${rc.rows.map(r=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;"><span>${esc(r.name)} ${r.qty} &times; ${r.office!=null?fmtRp(r.office):'?'}</span><b>${r.cost!=null?fmtRp(r.cost):'harga kantor belum diisi'}</b></div>`).join('')}
+          <div style="display:flex;justify-content:space-between;font-weight:800;font-size:13px;border-top:1px dashed var(--line);margin-top:4px;padding-top:6px;"><span>Harga asli stok</span><span>${fmtRp(rc.total)}${rc.missing?' *':''}</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;padding-top:3px;"><span>Selisih dari harga nota (${fmtRp(rc.nota)})</span><b>${fmtRp(rc.nota-rc.total)}</b></div>
+          ${rc.missing?`<div style="font-size:10px;color:var(--sub);">* ${rc.missing} produk stok belum punya harga kantor, belum dihitung.</div>`:''}
+        </div>`; })()}
       </div>`; })()}
       <div style="display:flex;gap:8px;margin-top:14px;">
         <button id="btn-export-pdf" class="btn-primary" style="flex:1;">⬇ PDF</button>
